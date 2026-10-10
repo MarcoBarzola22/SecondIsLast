@@ -1,11 +1,25 @@
 import { useState, type FormEvent } from 'react';
-import { ChevronRight, Plus, UserCheck, Users, AlertCircle } from 'lucide-react';
+import {
+  ChevronRight,
+  Plus,
+  UserCheck,
+  Users,
+  AlertCircle,
+  Trash2,
+  Trophy,
+  ListOrdered,
+} from 'lucide-react';
 import {
   formatPlayerName,
   isDuplicatePlayer,
   validatePlayerInput,
 } from '../../domain/players';
-import type { Player, PlayerId } from '../../domain/types';
+import type {
+  MatchFormat,
+  Player,
+  PlayerId,
+  TournamentType,
+} from '../../domain/types';
 import { useAppDispatch, useAppState } from '../../state/AppContext';
 import { PrimaryButton, SecondaryButton } from '../ui/Buttons';
 import { inputClassName } from '../ui/input';
@@ -23,22 +37,32 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
   const [lastName, setLastName] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  // Tournament and Match formats (RF-48, RF-49)
+  const [tournamentType, setTournamentType] = useState<TournamentType>(() => {
+    return activeTournament?.tournamentType ?? 'bracket';
+  });
+  const [matchFormat, setMatchFormat] = useState<MatchFormat>(() => {
+    return activeTournament?.matchFormat ?? 'two_legged';
+  });
+
   // Initial selection from active tournament or empty
   const [selectedIds, setSelectedIds] = useState<PlayerId[]>(() => {
     if (activeTournament) {
       return [...activeTournament.participantIds];
     }
-    // Preselect up to 6 players if available
-    return players.slice(0, 6).map((p) => p.id);
+    // Preselect up to 10 players if available
+    return players.slice(0, 10).map((p) => p.id);
   });
 
-  // Guard (RF-45): If tournament is already in Draft or Bracket, locked against changing participants
+  // Guard (RF-45): If tournament is already in Draft, Bracket or League, locked against changing participants
   const isLocked =
     activeTournament !== null &&
-    (activeTournament.phase === 'draft' || activeTournament.phase === 'bracket');
+    (activeTournament.phase === 'draft' ||
+      activeTournament.phase === 'bracket' ||
+      activeTournament.phase === 'league');
 
   const count = selectedIds.length;
-  const isValidCount = count >= 4 && count <= 6;
+  const isValidCount = count >= 4 && count <= 10;
 
   const handleAddPlayer = (e: FormEvent) => {
     e.preventDefault();
@@ -69,13 +93,34 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
 
     dispatch({ type: 'PLAYER_ADDED', player: newPlayer });
 
-    // Auto-select if under 6 and not locked
-    if (!isLocked && selectedIds.length < 6) {
+    // Auto-select if under 10 and not locked
+    if (!isLocked && selectedIds.length < 10) {
       setSelectedIds((prev) => [...prev, newPlayer.id]);
     }
 
     setFirstName('');
     setLastName('');
+  };
+
+  const handleDeletePlayer = (playerId: PlayerId, fullName: string) => {
+    if (
+      activeTournament &&
+      (activeTournament.phase === 'draft' ||
+        activeTournament.phase === 'bracket' ||
+        activeTournament.phase === 'league') &&
+      activeTournament.participantIds.includes(playerId)
+    ) {
+      alert('No podés eliminar a un jugador que está participando en un torneo en curso.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `¿Seguro que querés eliminar a ${fullName} del registro? Se borrarán también sus estadísticas acumuladas.`
+    );
+    if (confirmed) {
+      dispatch({ type: 'PLAYER_REMOVED', playerId });
+      setSelectedIds((prev) => prev.filter((id) => id !== playerId));
+    }
   };
 
   const handleToggleParticipant = (playerId: PlayerId) => {
@@ -103,6 +148,8 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
     dispatch({
       type: 'PARTICIPANTS_SET',
       participantIds: selectedIds,
+      tournamentType,
+      matchFormat,
       tournamentId,
       now,
     });
@@ -116,7 +163,7 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
         <div className="flex items-center gap-3 rounded-sm border border-accent/60 bg-secondary/80 p-4 text-sm text-foreground">
           <AlertCircle className="h-5 w-5 shrink-0 text-accent" />
           <p>
-            Hay un torneo en curso. No podés cambiar los participantes mientras el torneo esté en fase de Draft o Llaves.
+            Hay un torneo en curso. No podés cambiar los participantes ni las modalidades mientras el torneo esté en fase de Draft, Llaves o Liga.
           </p>
         </div>
       )}
@@ -176,10 +223,132 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
         </form>
       </Panel>
 
-      {/* 2. Lista de jugadores registrados y selección de participantes */}
+      {/* 2. Modalidades del Torneo (RF-48, RF-49) */}
+      <Panel
+        title="Formato de Competencia"
+        subtitle="Configurá la modalidad del torneo y de los partidos"
+      >
+        <div className="space-y-5">
+          {/* Selector Modalidad de Torneo (RF-48) */}
+          <div>
+            <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              Modalidad de Torneo (RF-48)
+            </label>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={() => setTournamentType('bracket')}
+                className={`flex flex-col items-start gap-1.5 rounded-sm border p-3.5 text-left transition ${
+                  tournamentType === 'bracket'
+                    ? 'border-primary/80 bg-primary/10 shadow-[0_0_12px_rgba(74,222,128,0.15)] ring-1 ring-primary'
+                    : 'border-border bg-background/50 hover:border-accent hover:bg-background/80'
+                } ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+              >
+                <div className="flex items-center gap-2">
+                  <Trophy
+                    className={`h-4 w-4 ${
+                      tournamentType === 'bracket'
+                        ? 'text-primary'
+                        : 'text-muted-foreground'
+                    }`}
+                  />
+                  <span className="font-display text-sm font-bold tracking-wider text-foreground">
+                    Llaves (Bracket asimétrico)
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Eliminación directa con Byes para los primeros sembrados y definición por 3er puesto.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={() => setTournamentType('league')}
+                className={`flex flex-col items-start gap-1.5 rounded-sm border p-3.5 text-left transition ${
+                  tournamentType === 'league'
+                    ? 'border-primary/80 bg-primary/10 shadow-[0_0_12px_rgba(74,222,128,0.15)] ring-1 ring-primary'
+                    : 'border-border bg-background/50 hover:border-accent hover:bg-background/80'
+                } ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+              >
+                <div className="flex items-center gap-2">
+                  <ListOrdered
+                    className={`h-4 w-4 ${
+                      tournamentType === 'league'
+                        ? 'text-primary'
+                        : 'text-muted-foreground'
+                    }`}
+                  />
+                  <span className="font-display text-sm font-bold tracking-wider text-foreground">
+                    Liga (Todos contra todos)
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Fixture Round Robin completo. Todos juegan contra todos con tabla de posiciones interna en vivo.
+                </p>
+              </button>
+            </div>
+          </div>
+
+          {/* Selector Modalidad de Partido (RF-49, RF-59: Visible para Llaves y Liga) */}
+          <div className="border-t border-border/50 pt-4">
+            <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              Modalidad de Partido ({tournamentType === 'league' ? 'Liga' : 'Llaves'})
+            </label>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={() => setMatchFormat('two_legged')}
+                className={`flex flex-col items-start gap-1.5 rounded-sm border p-3.5 text-left transition ${
+                  matchFormat === 'two_legged'
+                    ? 'border-primary/80 bg-primary/10 shadow-[0_0_12px_rgba(74,222,128,0.15)] ring-1 ring-primary'
+                    : 'border-border bg-background/50 hover:border-accent hover:bg-background/80'
+                } ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+              >
+                <span className="font-display text-sm font-bold tracking-wider text-foreground">
+                  {tournamentType === 'league'
+                    ? 'Ida y Vuelta (Doble Rueda)'
+                    : 'Ida y Vuelta (Clásico)'}
+                </span>
+                <p className="text-xs text-muted-foreground">
+                  {tournamentType === 'league'
+                    ? 'Doble Round Robin. Se juegan partidos de ida y vuelta invirtiendo localías.'
+                    : 'Dos partidos por serie. Global con definición por penales si hay igualdad.'}
+                </p>
+              </button>
+
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={() => setMatchFormat('single_match')}
+                className={`flex flex-col items-start gap-1.5 rounded-sm border p-3.5 text-left transition ${
+                  matchFormat === 'single_match'
+                    ? 'border-primary/80 bg-primary/10 shadow-[0_0_12px_rgba(74,222,128,0.15)] ring-1 ring-primary'
+                    : 'border-border bg-background/50 hover:border-accent hover:bg-background/80'
+                } ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+              >
+                <span className="font-display text-sm font-bold tracking-wider text-foreground">
+                  {tournamentType === 'league'
+                    ? 'Partido Único (Una Rueda)'
+                    : 'Partido Único (Rápido)'}
+                </span>
+                <p className="text-xs text-muted-foreground">
+                  {tournamentType === 'league'
+                    ? 'Round Robin simple. Todos juegan una vez contra cada rival.'
+                    : 'Un solo partido por serie a 90 min con penales directos en caso de empate.'}
+                </p>
+              </button>
+            </div>
+          </div>
+        </div>
+      </Panel>
+
+      {/* 3. Lista de jugadores registrados y selección de participantes */}
       <Panel
         title="Selección de Participantes"
-        subtitle={`${count}/6 seleccionados`}
+        subtitle={`${count}/10 seleccionados`}
       >
         {players.length === 0 ? (
           <div className="rounded-sm border border-dashed border-border p-8 text-center text-muted-foreground">
@@ -195,6 +364,10 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
           <ul className="space-y-2">
             {players.map((p) => {
               const isSelected = selectedIds.includes(p.id);
+              const isParticipantInActive =
+                isLocked &&
+                activeTournament !== null &&
+                activeTournament.participantIds.includes(p.id);
 
               return (
                 <li
@@ -219,16 +392,36 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
                     </span>
                   </div>
 
-                  {isSelected && (
-                    <span className="flex items-center gap-1 font-display text-xs font-bold uppercase tracking-wider text-primary">
-                      <UserCheck className="h-3.5 w-3.5" /> En torneo
-                    </span>
-                  )}
+                  <div className="flex items-center gap-3">
+                    {isSelected && (
+                      <span className="flex items-center gap-1 font-display text-xs font-bold uppercase tracking-wider text-primary">
+                        <UserCheck className="h-3.5 w-3.5" /> En torneo
+                      </span>
+                    )}
+
+                    <button
+                      type="button"
+                      disabled={isParticipantInActive}
+                      title={
+                        isParticipantInActive
+                          ? 'No podés eliminar a un participante de un torneo en curso'
+                          : 'Eliminar jugador'
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeletePlayer(p.id, `${p.firstName} ${p.lastName}`);
+                      }}
+                      className="rounded-sm p-1.5 text-muted-foreground/50 transition hover:bg-destructive/20 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-20"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 </li>
               );
             })}
           </ul>
         )}
+
 
         {/* 3. Indicador de faltantes / sobrantes y botón de continuar */}
         <div className="mt-8 flex flex-col items-center justify-between gap-4 border-t border-border pt-4 sm:flex-row">
@@ -238,9 +431,9 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
                 Faltan {4 - count} participante{4 - count === 1 ? '' : 's'} para alcanzar el mínimo de 4.
               </p>
             )}
-            {count > 6 && (
+            {count > 10 && (
               <p className="text-xs font-semibold uppercase tracking-wider text-destructive">
-                Sobran {count - 6} participante{count - 6 === 1 ? '' : 's'}. El máximo permitido son 6.
+                Sobran {count - 10} participante{count - 10 === 1 ? '' : 's'}. El máximo permitido son 10.
               </p>
             )}
             {isValidCount && (

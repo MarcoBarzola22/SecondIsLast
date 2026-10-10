@@ -88,3 +88,15 @@ export function formatPlayerName(
   const first = sanitizeName(player.firstName);
   return `${last}, ${first}`;
 }
+
+/**
+ * Removes a player by ID from a list of players (RF-46).
+ * Pure function: returns a new array without mutating the input.
+ */
+export function removePlayer(
+  players: readonly Player[],
+  playerId: string
+): Player[] {
+  return players.filter((p) => p.id !== playerId);
+}
+

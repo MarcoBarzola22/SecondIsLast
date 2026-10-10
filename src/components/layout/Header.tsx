@@ -10,28 +10,40 @@ import {
 import { useAppDispatch, useAppState } from '../../state/AppContext';
 import { DangerButton } from '../ui/Buttons';
 
-export type ViewType = 'registro' | 'tematica' | 'draft' | 'bracket' | 'tabla';
+export type ViewType =
+  | 'registro'
+  | 'tematica'
+  | 'draft'
+  | 'bracket'
+  | 'league'
+  | 'tabla';
 
 interface HeaderProps {
   currentView: ViewType;
   onNavigate: (view: ViewType) => void;
 }
 
-const STEPS: Array<{
-  id: ViewType;
-  label: string;
-  icon: typeof Users;
-}> = [
-  { id: 'registro', label: 'Registro', icon: Users },
-  { id: 'tematica', label: 'Temática', icon: Dices },
-  { id: 'draft', label: 'Draft', icon: Shuffle },
-  { id: 'bracket', label: 'Llaves', icon: Trophy },
-  { id: 'tabla', label: 'Tabla', icon: ListOrdered },
-];
-
 export function Header({ currentView, onNavigate }: HeaderProps) {
   const { activeTournament } = useAppState();
   const dispatch = useAppDispatch();
+
+  const isLeague = activeTournament?.tournamentType === 'league';
+
+  const steps: Array<{
+    id: ViewType;
+    label: string;
+    icon: typeof Users;
+  }> = [
+    { id: 'registro', label: 'Registro', icon: Users },
+    { id: 'tematica', label: 'Temática', icon: Dices },
+    { id: 'draft', label: 'Draft', icon: Shuffle },
+    {
+      id: isLeague ? 'league' : 'bracket',
+      label: isLeague ? 'Liga' : 'Llaves',
+      icon: isLeague ? ListOrdered : Trophy,
+    },
+    { id: 'tabla', label: 'Tabla', icon: ListOrdered },
+  ];
 
   const handleAbandon = () => {
     const confirmed = window.confirm(
@@ -57,14 +69,16 @@ export function Header({ currentView, onNavigate }: HeaderProps) {
       return (
         activeTournament.phase === 'theme' ||
         activeTournament.phase === 'draft' ||
-        activeTournament.phase === 'bracket'
+        activeTournament.phase === 'bracket' ||
+        activeTournament.phase === 'league'
       );
     }
 
     if (stepId === 'draft') {
       return (
         activeTournament.phase === 'draft' ||
-        activeTournament.phase === 'bracket'
+        activeTournament.phase === 'bracket' ||
+        activeTournament.phase === 'league'
       );
     }
 
@@ -72,11 +86,15 @@ export function Header({ currentView, onNavigate }: HeaderProps) {
       return activeTournament.phase === 'bracket';
     }
 
+    if (stepId === 'league') {
+      return activeTournament.phase === 'league';
+    }
+
     return false;
   };
 
   return (
-    <header className="panel-metal mb-6 flex flex-col items-center justify-between gap-4 rounded-md px-5 py-4 md:flex-row">
+    <header className="sticky top-0 z-50 panel-metal mb-6 flex flex-col items-center justify-between gap-4 rounded-md px-5 py-4 backdrop-blur-sm shadow-xl md:flex-row">
       <div className="flex items-center gap-3">
         <Gamepad2 className="h-9 w-9 text-primary text-glow" />
         <div>
@@ -91,7 +109,7 @@ export function Header({ currentView, onNavigate }: HeaderProps) {
 
       <div className="flex flex-wrap items-center justify-center gap-2">
         <nav className="flex flex-wrap justify-center gap-1">
-          {STEPS.map((s, i) => {
+          {steps.map((s, i) => {
             const active = s.id === currentView;
             const enabled = isStepEnabled(s.id);
 

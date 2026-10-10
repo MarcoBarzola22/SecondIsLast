@@ -51,3 +51,55 @@
 
 - [x] **T17 · Verificación final (DoD)** — `npm test` y `npm run build` en verde. Recorrido manual con 4, 5 y 6 jugadores, recarga a mitad de torneo, `localStorage` corrupto a mano y revisión de textos en rioplatense. Actualizar el "Inicio Rápido" del README.
   - Cubre: Criterios de Finalización (spec §5) · RF-40, RF-41.
+
+## Fase F — Ampliación de Funcionalidades
+
+- [x] **T18 · Dominio y Tests: Borrado de jugadores y reseteo de tabla** — Funciones puras en `players.ts` (`removePlayer`) y `standings.ts` (`resetStandings`, `removePlayerStats`). Tests unitarios para eliminar jugador y limpiar estadísticas históricas acumuladas.
+  - Cubre: RF-46, RF-47.
+- [x] **T19 · Dominio y Tests: Modalidad de Partido Único en Llaves** — Soporte de `MatchFormat` en `types.ts` y actualización de `series.ts` (`getSeriesResult`, `computeTournamentStats`) para calcular ganador, penales y estadísticas cuando `matchFormat === 'single_match'`. Tests unitarios con partidos únicos y empates con penales.
+  - Cubre: RF-21, RF-49.
+- [x] **T20 · Dominio y Tests: Modalidad Liga (Round Robin, tabla interna y podio)** — Nuevo módulo puro `src/domain/league.ts` (`generateLeagueFixture`, `setLeagueMatchScore`, `confirmLeagueMatch`, `reopenLeagueMatch`, `computeLeagueTable`, `isLeagueComplete`, `getLeaguePodium`). Tests unitarios para 4, 5 y 6 participantes, cálculo de puntos (PG 3, PE 1, PP 0), orden de tabla y podio.
+  - Cubre: RF-50, RF-51, RF-53, RF-54, RF-55.
+- [x] **T21 · Dominio y Tests: Sorteo Automático de Equipos** — Función pura `assignTeamsAutomatically(participantIds, teamNames, rng)` en `draft.ts`. Validación de N nombres no vacíos y sin duplicados, shuffle con Fisher-Yates y asignación 1 a 1. Tests unitarios deterministas y casos de error.
+  - Cubre: RF-11, RF-52.
+- [x] **T22 · Estado y Reducer: Soporte transversal de las 5 funcionalidades** — Nuevas acciones en `actions.ts` (`PLAYER_REMOVED`, `STANDINGS_RESET`, `TEAMS_BATCH_ASSIGNED`, `LEAGUE_GENERATED`, etc.) y lógica en `reducer.ts` con guardas de fase, compatibilidad hacia atrás en storage/reducer y finalización de torneos de liga.
+  - Cubre: RF-46, RF-47, RF-48, RF-49, RF-50, RF-52, RF-55 · Principio 3, 6 · D13, D14, D15, D16.
+- [x] **T23 · UI: Eliminación de Jugadores y Reset de Historial** — Botón de borrado en `RegistrationView` por jugador con protección si es participante activo; botón "Resetear historial" en `StandingsView` con confirmación estricta (`window.confirm`).
+  - Cubre: RF-46, RF-47.
+- [x] **T24 · UI: Selectores de Modalidades en Registro** — Selector de Modalidad de Torneo ("Llaves" vs "Liga") y selector condicional de Modalidad de Partido ("Ida y Vuelta" vs "Partido Único", visible solo si el torneo es Llaves) en `RegistrationView`. Persistencia de la selección al iniciar torneo.
+  - Cubre: RF-48, RF-49.
+- [x] **T25 · UI: Sorteo Automático de Equipos en Draft** — Selector en `DraftView` ("Asignación Manual" vs "Sorteo Automático"). Formulario de N inputs para carga rápida de equipos con validación en vivo y botón "Sortear y asignar equipos".
+  - Cubre: RF-11, RF-52.
+- [x] **T26 · UI: Adaptación de Llaves a Partido Único** — Modificación de `SeriesCard` y `BracketView` para renderizar únicamente la fila de partido cuando `matchFormat === 'single_match'` (ocultando vuelta y mostrando directamente el resultado con selector de penales en caso de empate).
+  - Cubre: RF-21, RF-49.
+- [x] **T27 · UI: Vista de Liga (LeagueView)** — Componente `LeagueView` (junto con `LeagueMatchCard` y `LeagueTable`) con fechas del fixture Round Robin, inputs de goles, confirmación/edición de partidos, tabla interna en tiempo real y panel de podio con "Finalizar torneo". Integración en `App.tsx` y `Header.tsx`.
+  - Cubre: RF-50, RF-51, RF-53, RF-54, RF-55, RF-30, RF-31.
+- [x] **T28 · Verificación final y DoD de la ampliación** — Ejecución de suite de tests (`npm test`) y build (`npm run build`) en verde. Verificación manual de las 5 nuevas funcionalidades en el navegador (borrado de jugador, reset de tabla, bracket único, liga round robin completa, draft automático).
+  - Cubre: Criterios de Finalización (DoD spec §5).
+
+## Fase G — Temáticas Personalizadas
+
+- [x] **T29 · Dominio y Estado: Temáticas personalizadas** — Soporte de `customThemes?: string[]` en `schema.ts` (con valor por defecto seguro `[]` y compatibilidad hacia atrás), funciones puras `validateCustomTheme(name, existingThemes)` y `getAllThemes(customThemes)` en `theme.ts`. Acción `CUSTOM_THEME_ADDED` en `actions.ts` y reducer en `reducer.ts`. Tests unitarios en `theme.test.ts` y `reducer.test.ts`.
+  - Cubre: RF-56, RF-57, RF-58 · Principio 2, 3 · D17.
+- [x] **T30 · UI: Gestión y visualización de Temáticas en ThemeView** — Renderizado de lista/badges con todas las temáticas disponibles actualmente en `ThemeView`, input de texto y botón "Agregar" con validación en vivo, y actualización de la ruleta para ciclar y sortear sobre `getAllThemes(customThemes)`.
+  - Cubre: RF-56, RF-57, RF-58.
+
+## Fase H — Liga a Ida y Vuelta (Doble Round Robin)
+
+- [x] **T31 · Dominio y Tests: Doble Round Robin en Liga** — Actualizar `generateLeagueFixture(participantIds, matchFormat, rng)` en `league.ts` para admitir `matchFormat: MatchFormat`. Cuando `matchFormat === 'two_legged'`, generar dos ruedas completas invirtiendo localía (`playerA <-> playerB`). Tests unitarios en `league.test.ts` para 4, 5 y 6 participantes con `two_legged` (verificando cantidad de fechas, partidos e inversión de localía).
+  - Cubre: RF-49, RF-50 · Principio 3 · D18.
+- [x] **T32 · UI: Selector de formato universal en Registro, Draft y Liga** — En `RegistrationView`, mostrar el selector de Modalidad de Partido de forma permanente (tanto para Llaves como para Liga) con etiquetas contextuales. En `DraftView`, pasar `matchFormat` a `generateLeagueFixture`. En `LeagueView`, indicar en el subtítulo si la liga es a una rueda o doble rueda.
+  - Cubre: RF-49, RF-50, RF-59.
+
+## Fase I — Ampliación de Capacidad a 10 Participantes
+
+- [x] **T33 · Dominio y Tests: Llaves Base 8 y Base 16 (7 a 10 participantes)** — Incorporar `'R16_1' | 'R16_2' | 'QF3' | 'QF4'` a `SeriesId` y `'round_of_16'` a `Round` en `types.ts`. Actualizar `generateBracket` en `bracket.ts` para soportar 7 participantes (3 QFs, 1 Bye a Semis), 8 participantes (4 QFs, 0 Byes), 9 participantes (1 Play-in Octavos `R16_1`, 7 Byes a Cuartos) y 10 participantes (2 Play-ins Octavos `R16_1` y `R16_2`, 6 Byes a Cuartos). Tests unitarios exhaustivos en `bracket.test.ts` para 7, 8, 9 y 10 participantes.
+  - Cubre: RF-17, RF-18, RF-19 · Principio 3 · D19.
+- [x] **T34 · Dominio y Tests: Liga para 7 a 10 participantes** — Actualizar validación de cantidad de participantes en `generateLeagueFixture` de `league.ts` (`count < 4 || count > 10`). Tests unitarios en `league.test.ts` para 7, 8, 9 y 10 participantes en modalidad a una y dos ruedas, verificando que los impares (7 y 9) tengan exactamente 1 jugador libre por fecha y el conteo exacto de partidos.
+  - Cubre: RF-50 · Principio 3 · D19.
+- [x] **T35 · Estado y Reducer: Soporte de hasta 10 participantes** — Actualizar validación en `reducer.ts` (`action.participantIds.length > 10` en `PARTICIPANTS_SET`). Tests en `reducer.test.ts` verificando la correcta inicialización y avance con 7 a 10 jugadores.
+  - Cubre: RF-6 · Principio 2, 3 · D19.
+- [x] **T36 · UI: Ampliación de Registro y Columna de Octavos en BracketView** — En `RegistrationView.tsx`, permitir seleccionar hasta 10 jugadores con contador `${count}/10` y mensajes acordes. En `BracketView.tsx`, renderizar condicionalmente la columna "Octavos de Final" (Play-in) cuando el torneo tenga series de ronda `round_of_16` (9 y 10 participantes) con ancho adecuado para scroll horizontal.
+  - Cubre: RF-6, RF-60.
+
+

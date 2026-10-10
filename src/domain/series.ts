@@ -1,4 +1,5 @@
 import type {
+  MatchFormat,
   PlayerId,
   Series,
   SeriesId,
@@ -36,10 +37,14 @@ export interface SeriesResult {
 }
 
 /**
- * Computes the aggregate score and winner/loser for a two-legged series (RF-21, RF-23, RF-24, RF-25, RF-29).
+ * Computes the aggregate score and winner/loser for a series (RF-21, RF-23, RF-24, RF-25, RF-29, RF-49).
+ * In single_match format, only leg1 is evaluated.
  * Penalty shootouts are strictly tiebreakers and do not add to global score or GF/GC (RF-29).
  */
-export function getSeriesResult(series: Series): SeriesResult {
+export function getSeriesResult(
+  series: Series,
+  matchFormat: MatchFormat = 'two_legged'
+): SeriesResult {
   if (!isSeriesReady(series)) {
     return {
       isReady: false,
@@ -55,7 +60,62 @@ export function getSeriesResult(series: Series): SeriesResult {
 
   const { leg1, leg2, playerA, playerB, penaltyWinner } = series;
 
-  // Running goals for partial displays (RF-24)
+  if (matchFormat === 'single_match') {
+    const runningA = leg1.a ?? 0;
+    const runningB = leg1.b ?? 0;
+    const isComplete = leg1.a !== null && leg1.b !== null;
+
+    if (!isComplete) {
+      return {
+        isReady: true,
+        isComplete: false,
+        globalA: runningA,
+        globalB: runningB,
+        isTied: false,
+        winner: null,
+        loser: null,
+        canConfirm: false,
+      };
+    }
+
+    const globalA = leg1.a!;
+    const globalB = leg1.b!;
+    const isTied = globalA === globalB;
+
+    let winner: PlayerId | null = null;
+    let loser: PlayerId | null = null;
+
+    if (globalA > globalB) {
+      winner = playerA;
+      loser = playerB;
+    } else if (globalB > globalA) {
+      winner = playerB;
+      loser = playerA;
+    } else {
+      if (penaltyWinner === playerA) {
+        winner = playerA;
+        loser = playerB;
+      } else if (penaltyWinner === playerB) {
+        winner = playerB;
+        loser = playerA;
+      }
+    }
+
+    const canConfirm = isComplete && winner !== null;
+
+    return {
+      isReady: true,
+      isComplete,
+      globalA,
+      globalB,
+      isTied,
+      winner,
+      loser,
+      canConfirm,
+    };
+  }
+
+  // Two-legged series
   const runningA = (leg1.a ?? 0) + (leg2.a ?? 0);
   const runningB = (leg1.b ?? 0) + (leg2.b ?? 0);
 
@@ -125,7 +185,8 @@ export function setLegScore(
   seriesId: SeriesId,
   leg: 'leg1' | 'leg2',
   side: Side,
-  value: number | null
+  value: number | null,
+  matchFormat: MatchFormat = 'two_legged'
 ): Series[] {
   if (value !== null && !isValidGoal(value)) {
     throw new Error(
@@ -143,7 +204,7 @@ export function setLegScore(
     };
 
     // Recalculate to verify if tie status changed
-    const res = getSeriesResult(updatedSeries);
+    const res = getSeriesResult(updatedSeries, matchFormat);
     if (!res.isTied && updatedSeries.penaltyWinner !== null) {
       updatedSeries.penaltyWinner = null;
     }
@@ -180,7 +241,13 @@ export function setPenaltyWinner(
 /**
  * Checks whether any scores have been entered for a series.
  */
-export function hasSeriesStarted(series: Series): boolean {
+export function hasSeriesStarted(
+  series: Series,
+  matchFormat: MatchFormat = 'two_legged'
+): boolean {
+  if (matchFormat === 'single_match') {
+    return series.leg1.a !== null || series.leg1.b !== null || series.confirmed;
+  }
   return (
     series.leg1.a !== null ||
     series.leg1.b !== null ||
@@ -196,7 +263,8 @@ export function hasSeriesStarted(series: Series): boolean {
  */
 export function canEditSeries(
   seriesList: readonly Series[],
-  seriesId: SeriesId
+  seriesId: SeriesId,
+  matchFormat: MatchFormat = 'two_legged'
 ): boolean {
   const current = seriesList.find((s) => s.id === seriesId);
   if (!current || !current.confirmed) {
@@ -209,7 +277,7 @@ export function canEditSeries(
 
   for (const targetId of downstreamIds) {
     const target = seriesList.find((s) => s.id === targetId);
-    if (target && hasSeriesStarted(target)) {
+    if (target && hasSeriesStarted(target, matchFormat)) {
       return false;
     }
   }
@@ -222,32 +290,36 @@ export function canEditSeries(
  */
 export function reopenSeries(
   seriesList: readonly Series[],
-  seriesId: SeriesId
+  seriesId: SeriesId,
+  matchFormat: MatchFormat = 'two_legged'
 ): Series[] {
-  if (!canEditSeries(seriesList, seriesId)) {
+  if (!canEditSeries(seriesList, seriesId, matchFormat)) {
     throw new Error(
       'No se puede editar esta llave porque la siguiente ronda ya tiene goles cargados.'
     );
   }
 
   return seriesList.map((s) =>
-    s.id === seriesId ? { ...s, confirmed: false } : s
+    s.id === seriesId
+      ? { ...s, confirmed: false, winner: null, loser: null }
+      : s
   );
 }
 
 /**
- * Confirms a series, locks it, and advances winner and loser to downstream matches (RF-26).
+ * Confirms a series, locks it, settles the winner/loser, and advances them to downstream matches (RF-26).
  */
 export function confirmSeries(
   seriesList: readonly Series[],
-  seriesId: SeriesId
+  seriesId: SeriesId,
+  matchFormat: MatchFormat = 'two_legged'
 ): Series[] {
   const target = seriesList.find((s) => s.id === seriesId);
   if (!target) {
     throw new Error(`Llave no encontrada: ${seriesId}`);
   }
 
-  const result = getSeriesResult(target);
+  const result = getSeriesResult(target, matchFormat);
   if (!result.canConfirm || result.winner === null) {
     throw new Error(
       'No se puede confirmar la llave: faltan goles o definir el ganador por penales.'
@@ -257,9 +329,14 @@ export function confirmSeries(
   const { winner, loser } = result;
 
   return seriesList.map((s) => {
-    // 1. Mark confirmed
+    // 1. Mark confirmed and record winner and loser directly on the series (even if no winnerTo / loserTo)
     if (s.id === seriesId) {
-      return { ...s, confirmed: true };
+      return {
+        ...s,
+        confirmed: true,
+        winner,
+        loser,
+      };
     }
 
     let updated = s;
@@ -283,6 +360,7 @@ export function confirmSeries(
     return updated;
   });
 }
+
 
 /**
  * Checks whether both the Final and Third Place series are confirmed (RF-30).

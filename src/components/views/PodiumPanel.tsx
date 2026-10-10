@@ -16,12 +16,28 @@ export function PodiumPanel({ onTournamentFinished }: PodiumPanelProps) {
 
   if (!activeTournament) return null;
 
-  // Render only when both Final and Third place are confirmed (RF-30)
-  if (!isBracketComplete(activeTournament.series)) {
+  const finalSeries = activeTournament.series.find((s) => s.id === 'F');
+  const thirdPlaceSeries = activeTournament.series.find((s) => s.id === 'TP');
+
+  // Render only when both Final and Third place exist and are strictly 100% confirmed (RF-30)
+  if (
+    !isBracketComplete(activeTournament.series) ||
+    !finalSeries ||
+    !finalSeries.confirmed ||
+    !thirdPlaceSeries ||
+    !thirdPlaceSeries.confirmed
+  ) {
     return null;
   }
 
-  const podium = getPodium(activeTournament.series);
+  const matchFormat = activeTournament.matchFormat ?? 'two_legged';
+  let podium: ReturnType<typeof getPodium>;
+  try {
+    podium = getPodium(activeTournament.series, matchFormat);
+  } catch (err) {
+    console.error('[PodiumPanel] Error al obtener el podio:', err);
+    return null;
+  }
   const playersMap = new Map(players.map((p) => [p.id, p]));
   const { teams } = activeTournament;
 

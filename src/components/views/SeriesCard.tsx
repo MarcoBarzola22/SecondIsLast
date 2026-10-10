@@ -20,11 +20,14 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
   if (!activeTournament) return null;
 
   const { byes, teams, series: allSeries } = activeTournament;
+  const matchFormat = activeTournament.matchFormat ?? 'two_legged';
+  const isSingleMatch = matchFormat === 'single_match';
+
   const playersMap = new Map(players.map((p) => [p.id, p]));
 
   const ready = isSeriesReady(series);
-  const result = getSeriesResult(series);
-  const editable = canEditSeries(allSeries, series.id);
+  const result = getSeriesResult(series, matchFormat);
+  const editable = canEditSeries(allSeries, series.id, matchFormat);
 
   const playerA = series.playerA ? playersMap.get(series.playerA) : null;
   const playerB = series.playerB ? playersMap.get(series.playerB) : null;
@@ -151,92 +154,150 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
       <div className="border-y border-border bg-background/60 p-3">
         {ready ? (
           <>
-            {/* Headers de partidos */}
-            <div className="grid grid-cols-2 gap-2 text-center font-display text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-              <span>Ida (L - V)</span>
-              <span>Vuelta (L - V)</span>
-            </div>
+            {isSingleMatch ? (
+              /* Modalidad Partido Único (RF-21, RF-49) */
+              <div>
+                <div className="text-center font-display text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  <span>Partido Único</span>
+                </div>
 
-            {/* Inputs de Ida y Vuelta */}
-            <div className="mt-1.5 grid grid-cols-2 gap-3">
-              {/* Partido de Ida: A es local, B es visitante */}
-              <div className="flex items-center justify-center gap-1.5 rounded bg-background/80 p-1.5 border border-border/50">
-                <input
-                  type="number"
-                  min={0}
-                  max={99}
-                  disabled={series.confirmed}
-                  value={series.leg1.a ?? ''}
-                  onChange={(e) => handleScoreChange('leg1', 'a', e.target.value)}
-                  placeholder="0"
-                  className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
-                  title={`Goles de ${nameA} en la Ida (Local)`}
-                />
-                <span className="text-muted-foreground font-bold">-</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={99}
-                  disabled={series.confirmed}
-                  value={series.leg1.b ?? ''}
-                  onChange={(e) => handleScoreChange('leg1', 'b', e.target.value)}
-                  placeholder="0"
-                  className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
-                  title={`Goles de ${nameB} en la Ida (Visitante)`}
-                />
+                <div className="mt-1.5 flex items-center justify-center">
+                  <div className="flex items-center justify-center gap-2 rounded bg-background/80 p-1.5 border border-border/50">
+                    <input
+                      type="number"
+                      min={0}
+                      max={99}
+                      disabled={series.confirmed}
+                      value={series.leg1.a ?? ''}
+                      onChange={(e) =>
+                        handleScoreChange('leg1', 'a', e.target.value)
+                      }
+                      placeholder="0"
+                      className="h-10 w-12 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
+                      title={`Goles de ${nameA}`}
+                    />
+                    <span className="text-muted-foreground font-bold text-lg">-</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={99}
+                      disabled={series.confirmed}
+                      value={series.leg1.b ?? ''}
+                      onChange={(e) =>
+                        handleScoreChange('leg1', 'b', e.target.value)
+                      }
+                      placeholder="0"
+                      className="h-10 w-12 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
+                      title={`Goles de ${nameB}`}
+                    />
+                  </div>
+                </div>
               </div>
+            ) : (
+              /* Modalidad Ida y Vuelta (RF-21) */
+              <div>
+                {/* Headers de partidos */}
+                <div className="grid grid-cols-2 gap-2 text-center font-display text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  <span>Ida (L - V)</span>
+                  <span>Vuelta (L - V)</span>
+                </div>
 
-              {/* Partido de Vuelta: B es local, A es visitante */}
-              <div className="flex items-center justify-center gap-1.5 rounded bg-background/80 p-1.5 border border-border/50">
-                <input
-                  type="number"
-                  min={0}
-                  max={99}
-                  disabled={series.confirmed}
-                  value={series.leg2.b ?? ''}
-                  onChange={(e) => handleScoreChange('leg2', 'b', e.target.value)}
-                  placeholder="0"
-                  className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
-                  title={`Goles de ${nameB} en la Vuelta (Local)`}
-                />
-                <span className="text-muted-foreground font-bold">-</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={99}
-                  disabled={series.confirmed}
-                  value={series.leg2.a ?? ''}
-                  onChange={(e) => handleScoreChange('leg2', 'a', e.target.value)}
-                  placeholder="0"
-                  className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
-                  title={`Goles de ${nameA} en la Vuelta (Visitante)`}
-                />
+                {/* Inputs de Ida y Vuelta */}
+                <div className="mt-1.5 grid grid-cols-2 gap-3">
+                  {/* Partido de Ida: A es local, B es visitante */}
+                  <div className="flex items-center justify-center gap-1.5 rounded bg-background/80 p-1.5 border border-border/50">
+                    <input
+                      type="number"
+                      min={0}
+                      max={99}
+                      disabled={series.confirmed}
+                      value={series.leg1.a ?? ''}
+                      onChange={(e) =>
+                        handleScoreChange('leg1', 'a', e.target.value)
+                      }
+                      placeholder="0"
+                      className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
+                      title={`Goles de ${nameA} en la Ida (Local)`}
+                    />
+                    <span className="text-muted-foreground font-bold">-</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={99}
+                      disabled={series.confirmed}
+                      value={series.leg1.b ?? ''}
+                      onChange={(e) =>
+                        handleScoreChange('leg1', 'b', e.target.value)
+                      }
+                      placeholder="0"
+                      className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
+                      title={`Goles de ${nameB} en la Ida (Visitante)`}
+                    />
+                  </div>
+
+                  {/* Partido de Vuelta: B es local, A es visitante */}
+                  <div className="flex items-center justify-center gap-1.5 rounded bg-background/80 p-1.5 border border-border/50">
+                    <input
+                      type="number"
+                      min={0}
+                      max={99}
+                      disabled={series.confirmed}
+                      value={series.leg2.b ?? ''}
+                      onChange={(e) =>
+                        handleScoreChange('leg2', 'b', e.target.value)
+                      }
+                      placeholder="0"
+                      className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
+                      title={`Goles de ${nameB} en la Vuelta (Local)`}
+                    />
+                    <span className="text-muted-foreground font-bold">-</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={99}
+                      disabled={series.confirmed}
+                      value={series.leg2.a ?? ''}
+                      onChange={(e) =>
+                        handleScoreChange('leg2', 'a', e.target.value)
+                      }
+                      placeholder="0"
+                      className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
+                      title={`Goles de ${nameA} en la Vuelta (Visitante)`}
+                    />
+                  </div>
+                </div>
+
+                {/* Global en vivo (RF-24) */}
+                <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-2 text-xs">
+                  <span className="uppercase tracking-widest text-muted-foreground">
+                    Global acumulado:
+                  </span>
+                  <span className="font-display text-xl font-black text-foreground">
+                    {result.isComplete ||
+                    result.globalA > 0 ||
+                    result.globalB > 0
+                      ? `${result.globalA} - ${result.globalB}`
+                      : '—'}
+                  </span>
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Global en vivo (RF-24) */}
-            <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-2 text-xs">
-              <span className="uppercase tracking-widest text-muted-foreground">
-                Global acumulado:
-              </span>
-              <span className="font-display text-xl font-black text-foreground">
-                {result.isComplete || result.globalA > 0 || result.globalB > 0
-                  ? `${result.globalA} - ${result.globalB}`
-                  : '—'}
-              </span>
-            </div>
-
-            {/* Selector de penales en caso de empate global (RF-25) */}
+            {/* Selector de penales en caso de empate (RF-25) */}
             {result.isTied && (
               <div className="mt-3 rounded-sm border border-accent bg-accent/10 p-2 text-left">
                 <label className="mb-1 block font-display text-[11px] font-bold uppercase tracking-wider text-accent">
-                  Empate global · Ganador por penales:
+                  {isSingleMatch
+                    ? 'Empate · Ganador por penales:'
+                    : 'Empate global · Ganador por penales:'}
                 </label>
                 <select
                   disabled={series.confirmed}
                   value={series.penaltyWinner ?? ''}
                   onChange={(e) =>
-                    handlePenaltyChange((e.target.value || null) as PlayerId | null)
+                    handlePenaltyChange(
+                      (e.target.value || null) as PlayerId | null
+                    )
                   }
                   className="w-full rounded-sm border border-field-border bg-field px-2.5 py-1.5 text-sm font-semibold text-foreground outline-none focus:border-accent disabled:opacity-75"
                 >

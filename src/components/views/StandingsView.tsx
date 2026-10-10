@@ -1,13 +1,24 @@
-import { Trophy, Users } from 'lucide-react';
+import { RotateCcw, Trophy, Users } from 'lucide-react';
 import { buildStandings } from '../../domain/standings';
-import { useAppState } from '../../state/AppContext';
+import { useAppDispatch, useAppState } from '../../state/AppContext';
+import { DangerButton } from '../ui/Buttons';
 import { Panel } from '../ui/Panel';
 
 export function StandingsView() {
   const { players, stats, history } = useAppState();
+  const dispatch = useAppDispatch();
 
   const rows = buildStandings(players, stats);
   const totalTournaments = history.length;
+
+  const handleResetHistory = () => {
+    const confirmed = window.confirm(
+      '¿Seguro que querés resetear todo el historial de la tabla? Se borrarán todos los puntos, estadísticas acumuladas y resúmenes de torneos finalizados. Los jugadores registrados se mantendrán intactos.'
+    );
+    if (confirmed) {
+      dispatch({ type: 'STANDINGS_RESET' });
+    }
+  };
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -21,7 +32,19 @@ export function StandingsView() {
               : `${totalTournaments} torneos disputados`
         }
       >
+        <div className="mb-4 flex justify-end">
+          <DangerButton
+            disabled={rows.length === 0 && totalTournaments === 0}
+            onClick={handleResetHistory}
+            title="Resetear tabla histórica"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            <span>Resetear Historial</span>
+          </DangerButton>
+        </div>
+
         {rows.length === 0 ? (
+
           <div className="rounded-sm border border-dashed border-border p-12 text-center text-muted-foreground">
             <Users className="mx-auto mb-3 h-10 w-10 opacity-40 text-accent" />
             <p className="font-display text-lg font-bold uppercase tracking-wider text-foreground">

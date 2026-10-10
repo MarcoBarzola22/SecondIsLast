@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assignTeamsAutomatically,
   createDraftOrder,
   getCurrentDrafter,
   isDraftComplete,
@@ -101,4 +102,48 @@ describe('draft - domain logic', () => {
       expect(isDraftComplete([], {})).toBe(false);
     });
   });
+
+  describe('assignTeamsAutomatically (RF-11, RF-52)', () => {
+    const teamNames = ['Boca', 'River', 'Milan', 'Real Madrid', 'Barcelona'];
+
+    it('throws if team count does not match participants count', () => {
+      expect(() =>
+        assignTeamsAutomatically(participants, ['Boca', 'River'])
+      ).toThrow(/no coincide con la cantidad de participantes/);
+    });
+
+    it('throws if any team name is empty or only whitespace', () => {
+      expect(() =>
+        assignTeamsAutomatically(participants, ['Boca', 'River', '  ', 'Milan', 'Inter'])
+      ).toThrow(/Todos los nombres de equipos son obligatorios/);
+    });
+
+    it('throws if duplicate team names are provided', () => {
+      expect(() =>
+        assignTeamsAutomatically(participants, ['Boca', 'River', 'boca', 'Milan', 'Inter'])
+      ).toThrow(/No puede haber nombres de equipos duplicados/);
+    });
+
+    it('assigns unique teams to all participants using Fisher-Yates', () => {
+      const result = assignTeamsAutomatically(
+        participants,
+        teamNames,
+        createMulberry32(12345)
+      );
+
+      // Verify all participants received an assignment
+      expect(Object.keys(result)).toHaveLength(participants.length);
+      for (const p of participants) {
+        expect(result[p]).toBeDefined();
+        expect(typeof result[p]).toBe('string');
+        expect(result[p]!.trim().length).toBeGreaterThan(0);
+      }
+
+      // Verify all teams were assigned exactly once
+      const assigned = Object.values(result);
+      expect(new Set(assigned).size).toBe(participants.length);
+      expect([...assigned].sort()).toEqual([...teamNames].sort());
+    });
+  });
 });
+

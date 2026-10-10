@@ -2,6 +2,7 @@ import { formatPlayerName } from './players';
 import { getSeriesResult } from './series';
 import type {
   ActiveTournament,
+  MatchFormat,
   Player,
   PlayerId,
   PlayerStats,
@@ -13,7 +14,10 @@ import type {
 /**
  * Derives the tournament podium (Champion, RunnerUp, 3rd, 4th) from confirmed F and TP series (RF-30).
  */
-export function getPodium(seriesList: readonly Series[]): Podium {
+export function getPodium(
+  seriesList: readonly Series[],
+  matchFormat: MatchFormat = 'two_legged'
+): Podium {
   const finalSeries = seriesList.find((s) => s.id === 'F');
   const thirdPlaceSeries = seriesList.find((s) => s.id === 'TP');
 
@@ -26,23 +30,62 @@ export function getPodium(seriesList: readonly Series[]): Podium {
     );
   }
 
-  const finalRes = getSeriesResult(finalSeries);
-  const thirdRes = getSeriesResult(thirdPlaceSeries);
+  // 1. Try with specified match format
+  let finalRes = getSeriesResult(finalSeries, matchFormat);
+  if (!finalRes.winner) {
+    const altFormat: MatchFormat =
+      matchFormat === 'two_legged' ? 'single_match' : 'two_legged';
+    const altRes = getSeriesResult(finalSeries, altFormat);
+    if (altRes.winner) {
+      finalRes = altRes;
+    }
+  }
 
-  if (!finalRes.winner || !finalRes.loser) {
+  let thirdRes = getSeriesResult(thirdPlaceSeries, matchFormat);
+  if (!thirdRes.winner) {
+    const altFormat: MatchFormat =
+      matchFormat === 'two_legged' ? 'single_match' : 'two_legged';
+    const altRes = getSeriesResult(thirdPlaceSeries, altFormat);
+    if (altRes.winner) {
+      thirdRes = altRes;
+    }
+  }
+
+  // 2. Extract winner and loser using getSeriesResult, or fallback to persisted series.winner/loser, or participants
+  const champion =
+    finalRes.winner ??
+    finalSeries.winner ??
+    finalSeries.playerA;
+
+  const runnerUp =
+    finalRes.loser ??
+    finalSeries.loser ??
+    (champion === finalSeries.playerA ? finalSeries.playerB : finalSeries.playerA);
+
+  const third =
+    thirdRes.winner ??
+    thirdPlaceSeries.winner ??
+    thirdPlaceSeries.playerA;
+
+  const fourth =
+    thirdRes.loser ??
+    thirdPlaceSeries.loser ??
+    (third === thirdPlaceSeries.playerA ? thirdPlaceSeries.playerB : thirdPlaceSeries.playerA);
+
+  if (!champion || !runnerUp) {
     throw new Error('La Final no tiene ganador o perdedor definido.');
   }
-  if (!thirdRes.winner || !thirdRes.loser) {
+  if (!third || !fourth) {
     throw new Error(
       'El partido por el 3er Puesto no tiene ganador o perdedor definido.'
     );
   }
 
   return {
-    champion: finalRes.winner,
-    runnerUp: finalRes.loser,
-    third: thirdRes.winner,
-    fourth: thirdRes.loser,
+    champion,
+    runnerUp,
+    third,
+    fourth,
   };
 }
 
@@ -62,12 +105,15 @@ function createEmptyPlayerStats(playerId: PlayerId): PlayerStats {
 /**
  * Computes tournament statistical deltas for all participants (RF-31, RF-32).
  * Points: Champion +10, RunnerUp +7, 3rd +5, 4th +3, Quarterfinal losers +1.
- * Matches: Each series = 1 PJ, 1 PG/PP. Aggregates GF/GC across both legs. TJ = 1.
+ * Matches: Each series = 1 PJ, 1 PG/PP. Aggregates GF/GC across both legs (or single leg if single_match). TJ = 1.
  */
 export function computeTournamentStats(
-  tournament: Pick<ActiveTournament, 'participantIds' | 'series'>
+  tournament: Pick<ActiveTournament, 'participantIds' | 'series'> & {
+    matchFormat?: MatchFormat;
+  }
 ): { stats: Record<PlayerId, PlayerStats>; podium: Podium } {
-  const podium = getPodium(tournament.series);
+  const matchFormat = tournament.matchFormat ?? 'two_legged';
+  const podium = getPodium(tournament.series, matchFormat);
 
   const deltas: Record<PlayerId, PlayerStats> = {};
   for (const id of tournament.participantIds) {
@@ -86,7 +132,7 @@ export function computeTournamentStats(
   // Quarterfinal losers (+1 PTS)
   for (const s of tournament.series) {
     if (s.round === 'quarterfinal' && s.confirmed) {
-      const res = getSeriesResult(s);
+      const res = getSeriesResult(s, matchFormat);
       if (res.loser && deltas[res.loser]) {
         deltas[res.loser].pts += 1;
       }
@@ -94,16 +140,17 @@ export function computeTournamentStats(
   }
 
   // 2. Accumulate match performance (PJ, PG, PP, GF, GC) across all confirmed series (including TP, RF-32)
+  const isSingleMatch = matchFormat === 'single_match';
   for (const s of tournament.series) {
     if (!s.confirmed || !s.playerA || !s.playerB) {
       continue;
     }
 
-    const res = getSeriesResult(s);
+    const res = getSeriesResult(s, matchFormat);
     const { playerA, playerB } = s;
 
-    const goalsA = (s.leg1.a ?? 0) + (s.leg2.a ?? 0);
-    const goalsB = (s.leg1.b ?? 0) + (s.leg2.b ?? 0);
+    const goalsA = (s.leg1.a ?? 0) + (isSingleMatch ? 0 : (s.leg2.a ?? 0));
+    const goalsB = (s.leg1.b ?? 0) + (isSingleMatch ? 0 : (s.leg2.b ?? 0));
 
     // Player A stats for this series
     if (deltas[playerA]) {
@@ -126,6 +173,7 @@ export function computeTournamentStats(
 
   return { stats: deltas, podium };
 }
+
 
 /**
  * Purely merges tournament stats delta into existing historical stats (RF-31).
@@ -209,3 +257,25 @@ export function buildStandings(
     dg: item.dg,
   }));
 }
+
+/**
+ * Removes a player's statistics record from historical stats (RF-46).
+ * Pure function: returns a new object without mutating the input.
+ */
+export function removePlayerStats(
+  stats: Record<PlayerId, PlayerStats>,
+  playerId: PlayerId
+): Record<PlayerId, PlayerStats> {
+  const next = { ...stats };
+  delete next[playerId];
+  return next;
+}
+
+/**
+ * Resets all accumulated standings statistics to an empty record (RF-47).
+ * Pure function.
+ */
+export function resetStandings(): Record<PlayerId, PlayerStats> {
+  return {};
+}
+

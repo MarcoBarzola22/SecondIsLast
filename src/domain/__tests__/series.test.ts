@@ -230,4 +230,95 @@ describe('series - domain logic (RF-21 to RF-29)', () => {
       expect(isBracketComplete(completed)).toBe(true);
     });
   });
+
+  describe('single_match format (RF-21, RF-49)', () => {
+    const singleSeries: Series = {
+      id: 'SF1',
+      round: 'semifinal',
+      playerA: 'p1',
+      playerB: 'p2',
+      leg1: { a: null, b: null },
+      leg2: { a: null, b: null },
+      penaltyWinner: null,
+      confirmed: false,
+      winnerTo: { seriesId: 'F', side: 'a' },
+      loserTo: { seriesId: 'TP', side: 'a' },
+    };
+
+    it('requires only leg1 to be complete in single_match', () => {
+      let res = getSeriesResult(singleSeries, 'single_match');
+      expect(res.isComplete).toBe(false);
+      expect(res.canConfirm).toBe(false);
+
+      const withLeg1: Series = {
+        ...singleSeries,
+        leg1: { a: 3, b: 1 },
+      };
+      res = getSeriesResult(withLeg1, 'single_match');
+      expect(res.isComplete).toBe(true);
+      expect(res.globalA).toBe(3);
+      expect(res.globalB).toBe(1);
+      expect(res.winner).toBe('p1');
+      expect(res.loser).toBe('p2');
+      expect(res.canConfirm).toBe(true);
+    });
+
+    it('identifies tie in single_match and requires penalties to confirm', () => {
+      const tied: Series = {
+        ...singleSeries,
+        leg1: { a: 2, b: 2 },
+      };
+      let res = getSeriesResult(tied, 'single_match');
+      expect(res.isComplete).toBe(true);
+      expect(res.isTied).toBe(true);
+      expect(res.winner).toBeNull();
+      expect(res.canConfirm).toBe(false);
+
+      const withPenalties: Series = {
+        ...tied,
+        penaltyWinner: 'p2',
+      };
+      res = getSeriesResult(withPenalties, 'single_match');
+      expect(res.winner).toBe('p2');
+      expect(res.loser).toBe('p1');
+      expect(res.canConfirm).toBe(true);
+    });
+
+    it('supports confirmSeries and score updates in single_match', () => {
+      const seriesList = [singleSeries];
+      let updated = setLegScore(seriesList, 'SF1', 'leg1', 'a', 2, 'single_match');
+      updated = setLegScore(updated, 'SF1', 'leg1', 'b', 0, 'single_match');
+
+      const confirmed = confirmSeries(updated, 'SF1', 'single_match');
+      expect(confirmed[0]!.confirmed).toBe(true);
+      expect(confirmed[0]!.winner).toBe('p1');
+      expect(confirmed[0]!.loser).toBe('p2');
+    });
+
+    it('settles and persists winner and loser on Final series without winnerTo', () => {
+      const finalSeries: Series = {
+        id: 'F',
+        round: 'final',
+        playerA: 'p1',
+        playerB: 'p2',
+        leg1: { a: 1, b: 0 },
+        leg2: { a: null, b: null },
+        penaltyWinner: null,
+        confirmed: false,
+        winnerTo: null,
+        loserTo: null,
+      };
+
+      const confirmed = confirmSeries([finalSeries], 'F', 'single_match');
+      expect(confirmed[0]!.confirmed).toBe(true);
+      expect(confirmed[0]!.winner).toBe('p1');
+      expect(confirmed[0]!.loser).toBe('p2');
+
+      const reopened = reopenSeries(confirmed, 'F', 'single_match');
+      expect(reopened[0]!.confirmed).toBe(false);
+      expect(reopened[0]!.winner).toBeNull();
+      expect(reopened[0]!.loser).toBeNull();
+    });
+  });
 });
+

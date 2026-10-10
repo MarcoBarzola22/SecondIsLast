@@ -1,4 +1,15 @@
-import { isDuplicatePlayer } from '../domain/players';
+import {
+  isDuplicatePlayer,
+  removePlayer,
+} from '../domain/players';
+import { addCustomTheme } from '../domain/theme';
+import {
+  confirmLeagueMatch,
+  computeLeagueTournamentStats,
+  isLeagueComplete,
+  reopenLeagueMatch,
+  setLeagueMatchScore,
+} from '../domain/league';
 import {
   confirmSeries,
   isBracketComplete,
@@ -6,8 +17,16 @@ import {
   setLegScore,
   setPenaltyWinner,
 } from '../domain/series';
-import { applyStats, computeTournamentStats } from '../domain/standings';
-import type { ActiveTournament, TournamentSummary } from '../domain/types';
+import {
+  applyStats,
+  computeTournamentStats,
+  removePlayerStats,
+  resetStandings,
+} from '../domain/standings';
+import type {
+  ActiveTournament,
+  TournamentSummary,
+} from '../domain/types';
 import type { AppData } from '../storage/schema';
 import type { Action } from './actions';
 
@@ -32,22 +51,71 @@ export function appReducer(state: AppData, action: Action): AppData {
       };
     }
 
-    case 'PARTICIPANTS_SET': {
-      // Guard (RF-45): Cannot change participants while tournament is in draft or bracket phase
+    case 'PLAYER_REMOVED': {
+      // Guard (RF-46): Cannot delete player who is an active participant in an ongoing tournament
       if (
         state.activeTournament &&
         (state.activeTournament.phase === 'draft' ||
-          state.activeTournament.phase === 'bracket')
+          state.activeTournament.phase === 'bracket' ||
+          state.activeTournament.phase === 'league') &&
+        state.activeTournament.participantIds.includes(action.playerId)
       ) {
         console.warn(
-          '[Reducer] Cannot modify participants while tournament is active in draft or bracket phase.'
+          '[Reducer] Cannot remove player while participating in an active tournament in progress (RF-46).'
+        );
+        return state;
+      }
+
+      const updatedPlayers = removePlayer(state.players, action.playerId);
+      const updatedStats = removePlayerStats(state.stats, action.playerId);
+
+      let updatedActiveTournament = state.activeTournament;
+      if (
+        updatedActiveTournament &&
+        updatedActiveTournament.participantIds.includes(action.playerId)
+      ) {
+        updatedActiveTournament = {
+          ...updatedActiveTournament,
+          participantIds: updatedActiveTournament.participantIds.filter(
+            (id) => id !== action.playerId
+          ),
+        };
+      }
+
+      return {
+        ...state,
+        players: updatedPlayers,
+        stats: updatedStats,
+        activeTournament: updatedActiveTournament,
+      };
+    }
+
+    case 'STANDINGS_RESET': {
+      // RF-47: Clears all historical accumulated stats and tournament history atomically
+      return {
+        ...state,
+        stats: resetStandings(),
+        history: [],
+      };
+    }
+
+    case 'PARTICIPANTS_SET': {
+      // Guard (RF-45): Cannot change participants while tournament is in draft, bracket or league phase
+      if (
+        state.activeTournament &&
+        (state.activeTournament.phase === 'draft' ||
+          state.activeTournament.phase === 'bracket' ||
+          state.activeTournament.phase === 'league')
+      ) {
+        console.warn(
+          '[Reducer] Cannot modify participants while tournament is active in draft, bracket, or league phase.'
         );
         return state;
       }
 
       if (
         action.participantIds.length < 4 ||
-        action.participantIds.length > 6
+        action.participantIds.length > 10
       ) {
         console.warn(
           '[Reducer] Invalid participants count:',
@@ -60,12 +128,15 @@ export function appReducer(state: AppData, action: Action): AppData {
         id: action.tournamentId,
         createdAt: action.now,
         phase: 'theme',
+        tournamentType: action.tournamentType ?? 'bracket',
+        matchFormat: action.matchFormat ?? 'two_legged',
         participantIds: action.participantIds,
         theme: null,
         draftOrder: [],
         teams: {},
         byes: [],
         series: [],
+        leagueMatches: [],
       };
 
       return {
@@ -129,6 +200,25 @@ export function appReducer(state: AppData, action: Action): AppData {
       };
     }
 
+    case 'TEAMS_BATCH_ASSIGNED': {
+      // RF-52: Batch assignment from automatic team draw
+      if (!state.activeTournament || state.activeTournament.phase !== 'draft') {
+        console.warn('[Reducer] Cannot batch assign teams outside draft phase.');
+        return state;
+      }
+
+      return {
+        ...state,
+        activeTournament: {
+          ...state.activeTournament,
+          teams: {
+            ...state.activeTournament.teams,
+            ...action.teams,
+          },
+        },
+      };
+    }
+
     case 'BRACKET_GENERATED': {
       if (!state.activeTournament) {
         console.warn('[Reducer] No active tournament to set bracket.');
@@ -164,7 +254,8 @@ export function appReducer(state: AppData, action: Action): AppData {
           action.seriesId,
           action.leg,
           action.side,
-          action.value
+          action.value,
+          state.activeTournament.matchFormat ?? 'two_legged'
         );
         return {
           ...state,
@@ -211,7 +302,8 @@ export function appReducer(state: AppData, action: Action): AppData {
       try {
         const updatedSeries = confirmSeries(
           state.activeTournament.series,
-          action.seriesId
+          action.seriesId,
+          state.activeTournament.matchFormat ?? 'two_legged'
         );
         return {
           ...state,
@@ -234,7 +326,8 @@ export function appReducer(state: AppData, action: Action): AppData {
       try {
         const updatedSeries = reopenSeries(
           state.activeTournament.series,
-          action.seriesId
+          action.seriesId,
+          state.activeTournament.matchFormat ?? 'two_legged'
         );
         return {
           ...state,
@@ -249,44 +342,197 @@ export function appReducer(state: AppData, action: Action): AppData {
       }
     }
 
-    case 'TOURNAMENT_FINISHED': {
-      if (!state.activeTournament || state.activeTournament.phase !== 'bracket') {
-        console.warn('[Reducer] Cannot finish tournament: no tournament in bracket phase.');
+    case 'LEAGUE_GENERATED': {
+      if (!state.activeTournament) {
+        console.warn('[Reducer] No active tournament to set league.');
+        return state;
+      }
+      if (
+        state.activeTournament.leagueMatches &&
+        state.activeTournament.leagueMatches.length > 0
+      ) {
+        console.warn('[Reducer] League fixture already generated.');
         return state;
       }
 
-      if (!isBracketComplete(state.activeTournament.series)) {
-        console.warn('[Reducer] Cannot finish tournament: Final and Third place must be confirmed.');
+      return {
+        ...state,
+        activeTournament: {
+          ...state.activeTournament,
+          phase: 'league',
+          leagueMatches: action.matches,
+        },
+      };
+    }
+
+    case 'LEAGUE_MATCH_SCORE_SET': {
+      if (
+        !state.activeTournament ||
+        state.activeTournament.phase !== 'league' ||
+        !state.activeTournament.leagueMatches
+      ) {
         return state;
       }
 
       try {
-        const { stats: deltas, podium } = computeTournamentStats(
-          state.activeTournament
+        const updated = setLeagueMatchScore(
+          state.activeTournament.leagueMatches,
+          action.matchId,
+          action.scoreA,
+          action.scoreB
         );
-        const updatedStats = applyStats(state.stats, deltas);
-
-        const summary: TournamentSummary = {
-          id: action.summaryId,
-          finishedAt: action.now,
-          theme: state.activeTournament.theme ?? 'Sin temática',
-          participants: state.activeTournament.participantIds.map((id) => ({
-            playerId: id,
-            team: state.activeTournament?.teams[id] ?? '',
-          })),
-          podium,
-        };
-
         return {
           ...state,
-          stats: updatedStats,
-          history: [summary, ...state.history],
-          activeTournament: null, // RF-33: Active tournament cleared atomically
+          activeTournament: {
+            ...state.activeTournament,
+            leagueMatches: updated,
+          },
         };
       } catch (err) {
-        console.error('[Reducer] Error finalizing tournament:', err);
+        console.error('[Reducer] Error setting league match score:', err);
         return state;
       }
+    }
+
+    case 'LEAGUE_MATCH_CONFIRMED': {
+      if (
+        !state.activeTournament ||
+        state.activeTournament.phase !== 'league' ||
+        !state.activeTournament.leagueMatches
+      ) {
+        return state;
+      }
+
+      try {
+        const updated = confirmLeagueMatch(
+          state.activeTournament.leagueMatches,
+          action.matchId
+        );
+        return {
+          ...state,
+          activeTournament: {
+            ...state.activeTournament,
+            leagueMatches: updated,
+          },
+        };
+      } catch (err) {
+        console.error('[Reducer] Error confirming league match:', err);
+        return state;
+      }
+    }
+
+    case 'LEAGUE_MATCH_EDIT_REQUESTED': {
+      if (
+        !state.activeTournament ||
+        state.activeTournament.phase !== 'league' ||
+        !state.activeTournament.leagueMatches
+      ) {
+        return state;
+      }
+
+      try {
+        const updated = reopenLeagueMatch(
+          state.activeTournament.leagueMatches,
+          action.matchId
+        );
+        return {
+          ...state,
+          activeTournament: {
+            ...state.activeTournament,
+            leagueMatches: updated,
+          },
+        };
+      } catch (err) {
+        console.error('[Reducer] Error reopening league match:', err);
+        return state;
+      }
+    }
+
+    case 'TOURNAMENT_FINISHED': {
+      if (!state.activeTournament) {
+        console.warn('[Reducer] Cannot finish tournament: no active tournament.');
+        return state;
+      }
+
+      if (state.activeTournament.phase === 'bracket') {
+        if (!isBracketComplete(state.activeTournament.series)) {
+          console.warn('[Reducer] Cannot finish tournament: Final and Third place must be confirmed.');
+          return state;
+        }
+
+        try {
+          const { stats: deltas, podium } = computeTournamentStats(
+            state.activeTournament
+          );
+          const updatedStats = applyStats(state.stats, deltas);
+
+          const summary: TournamentSummary = {
+            id: action.summaryId,
+            finishedAt: action.now,
+            theme: state.activeTournament.theme ?? 'Sin temática',
+            tournamentType: 'bracket',
+            matchFormat: state.activeTournament.matchFormat ?? 'two_legged',
+            participants: state.activeTournament.participantIds.map((id) => ({
+              playerId: id,
+              team: state.activeTournament?.teams[id] ?? '',
+            })),
+            podium,
+          };
+
+          return {
+            ...state,
+            stats: updatedStats,
+            history: [summary, ...state.history],
+            activeTournament: null, // RF-33: Active tournament cleared atomically
+          };
+        } catch (err) {
+          console.error('[Reducer] Error finalizing bracket tournament:', err);
+          return state;
+        }
+      }
+
+      if (state.activeTournament.phase === 'league') {
+        const matches = state.activeTournament.leagueMatches ?? [];
+        if (!isLeagueComplete(matches)) {
+          console.warn('[Reducer] Cannot finish league tournament: all matches must be confirmed.');
+          return state;
+        }
+
+        try {
+          const { stats: deltas, podium } = computeLeagueTournamentStats(
+            state.activeTournament.participantIds,
+            matches,
+            state.activeTournament.teams,
+            state.players
+          );
+          const updatedStats = applyStats(state.stats, deltas);
+
+          const summary: TournamentSummary = {
+            id: action.summaryId,
+            finishedAt: action.now,
+            theme: state.activeTournament.theme ?? 'Sin temática',
+            tournamentType: 'league',
+            participants: state.activeTournament.participantIds.map((id) => ({
+              playerId: id,
+              team: state.activeTournament?.teams[id] ?? '',
+            })),
+            podium,
+          };
+
+          return {
+            ...state,
+            stats: updatedStats,
+            history: [summary, ...state.history],
+            activeTournament: null, // RF-33 / RF-55
+          };
+        } catch (err) {
+          console.error('[Reducer] Error finalizing league tournament:', err);
+          return state;
+        }
+      }
+
+      console.warn('[Reducer] Cannot finish tournament: tournament is neither in bracket nor league phase.');
+      return state;
     }
 
     case 'TOURNAMENT_ABANDONED': {
@@ -295,6 +541,20 @@ export function appReducer(state: AppData, action: Action): AppData {
         ...state,
         activeTournament: null,
       };
+    }
+
+    case 'CUSTOM_THEME_ADDED': {
+      try {
+        const currentCustom = state.customThemes ?? [];
+        const updatedCustom = addCustomTheme(currentCustom, action.theme);
+        return {
+          ...state,
+          customThemes: updatedCustom,
+        };
+      } catch (err) {
+        console.warn('[Reducer] Error adding custom theme:', err);
+        return state;
+      }
     }
 
     default:

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Header, type ViewType } from './components/layout/Header';
 import { BracketView } from './components/views/BracketView';
 import { DraftView } from './components/views/DraftView';
+import { LeagueView } from './components/views/LeagueView';
 import { PodiumPanel } from './components/views/PodiumPanel';
 import { RegistrationView } from './components/views/RegistrationView';
 import { StandingsView } from './components/views/StandingsView';
@@ -17,6 +18,7 @@ export default function App() {
       if (activeTournament.phase === 'theme') return 'tematica';
       if (activeTournament.phase === 'draft') return 'draft';
       if (activeTournament.phase === 'bracket') return 'bracket';
+      if (activeTournament.phase === 'league') return 'league';
     }
     return 'registro';
   });
@@ -35,13 +37,20 @@ export default function App() {
         )}
 
         {view === 'draft' && (
-          <DraftView onProceedToBracket={() => setView('bracket')} />
+          <DraftView
+            onProceedToBracket={() => setView('bracket')}
+            onProceedToLeague={() => setView('league')}
+          />
         )}
 
         {view === 'bracket' && (
           <BracketView>
             <PodiumPanel onTournamentFinished={() => setView('tabla')} />
           </BracketView>
+        )}
+
+        {view === 'league' && (
+          <LeagueView onTournamentFinished={() => setView('tabla')} />
         )}
 
         {view === 'tabla' && <StandingsView />}

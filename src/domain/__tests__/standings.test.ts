@@ -10,10 +10,12 @@ import {
   buildStandings,
   computeTournamentStats,
   getPodium,
+  removePlayerStats,
+  resetStandings,
 } from '../standings';
 import type { Player, Series } from '../types';
 
-describe('standings - domain logic (RF-30 to RF-37)', () => {
+describe('standings - domain logic (RF-30 to RF-37, RF-46, RF-47)', () => {
   const players: Player[] = [
     { id: 'p1', firstName: 'Marco', lastName: 'Barzola', createdAt: '2026-10-09' },
     { id: 'p2', firstName: 'Lucho', lastName: 'Fernández', createdAt: '2026-10-09' },
@@ -247,4 +249,180 @@ describe('standings - domain logic (RF-30 to RF-37)', () => {
     expect(standings).toHaveLength(1);
     expect(standings[0]!.playerId).toBe('p1');
   });
+
+  describe('removePlayerStats (RF-46)', () => {
+    it('removes statistics for the target player and returns a fresh object', () => {
+      const statsMap = {
+        p1: { playerId: 'p1', pts: 10, pj: 3, pg: 3, pp: 0, gf: 8, gc: 2, tj: 1 },
+        p2: { playerId: 'p2', pts: 7, pj: 3, pg: 2, pp: 1, gf: 5, gc: 4, tj: 1 },
+      };
+
+      const result = removePlayerStats(statsMap, 'p1');
+      expect(result).not.toHaveProperty('p1');
+      expect(result).toHaveProperty('p2');
+      expect(statsMap).toHaveProperty('p1'); // original remains untouched
+    });
+
+    it('returns an identical shallow clone if player does not exist in stats', () => {
+      const statsMap = {
+        p1: { playerId: 'p1', pts: 10, pj: 3, pg: 3, pp: 0, gf: 8, gc: 2, tj: 1 },
+      };
+      const result = removePlayerStats(statsMap, 'non-existent');
+      expect(result).toEqual(statsMap);
+    });
+  });
+
+  describe('resetStandings (RF-47)', () => {
+    it('returns an empty object to clear all accumulated statistics', () => {
+      const result = resetStandings();
+      expect(result).toEqual({});
+      expect(Object.keys(result)).toHaveLength(0);
+    });
+  });
+
+  describe('computeTournamentStats with single_match format (RF-21, RF-49)', () => {
+    it('tallies goals only from leg1 and computes correct podium and stats', () => {
+      const seriesList: Series[] = [
+        {
+          id: 'SF1',
+          round: 'semifinal',
+          playerA: 'p1',
+          playerB: 'p2',
+          leg1: { a: 3, b: 1 },
+          leg2: { a: null, b: null },
+          penaltyWinner: null,
+          confirmed: true,
+          winnerTo: { seriesId: 'F', side: 'a' },
+          loserTo: { seriesId: 'TP', side: 'a' },
+        },
+        {
+          id: 'SF2',
+          round: 'semifinal',
+          playerA: 'p3',
+          playerB: 'p4',
+          leg1: { a: 0, b: 2 },
+          leg2: { a: null, b: null },
+          penaltyWinner: null,
+          confirmed: true,
+          winnerTo: { seriesId: 'F', side: 'b' },
+          loserTo: { seriesId: 'TP', side: 'b' },
+        },
+        {
+          id: 'TP',
+          round: 'third_place',
+          playerA: 'p2',
+          playerB: 'p3',
+          leg1: { a: 2, b: 1 },
+          leg2: { a: null, b: null },
+          penaltyWinner: null,
+          confirmed: true,
+          winnerTo: null,
+          loserTo: null,
+        },
+        {
+          id: 'F',
+          round: 'final',
+          playerA: 'p1',
+          playerB: 'p4',
+          leg1: { a: 1, b: 2 },
+          leg2: { a: null, b: null },
+          penaltyWinner: null,
+          confirmed: true,
+          winnerTo: null,
+          loserTo: null,
+        },
+      ];
+
+      const { stats, podium } = computeTournamentStats({
+        participantIds: ['p1', 'p2', 'p3', 'p4'],
+        series: seriesList,
+        matchFormat: 'single_match',
+      });
+
+      // Champion: p4, RunnerUp: p1, Third: p2, Fourth: p3
+      expect(podium).toEqual({
+        champion: 'p4',
+        runnerUp: 'p1',
+        third: 'p2',
+        fourth: 'p3',
+      });
+
+      // P4 (Champion): 10 PTS, 2 PJ, 2 PG, 0 PP, GF = 2 + 2 = 4, GC = 0 + 1 = 1
+      expect(stats['p4']).toEqual({
+        playerId: 'p4',
+        pts: 10,
+        pj: 2,
+        pg: 2,
+        pp: 0,
+        gf: 4,
+        gc: 1,
+        tj: 1,
+      });
+
+      // P1 (RunnerUp): 7 PTS, 2 PJ, 1 PG, 1 PP, GF = 3 + 1 = 4, GC = 1 + 2 = 3
+      expect(stats['p1']).toEqual({
+        playerId: 'p1',
+        pts: 7,
+        pj: 2,
+        pg: 1,
+        pp: 1,
+        gf: 4,
+        gc: 3,
+        tj: 1,
+      });
+    });
+
+    it('extracts podium in single_match format and falls back safely if matchFormat was omitted (RF-30)', () => {
+      const singleMatchSeries: Series[] = [
+        {
+          id: 'F',
+          round: 'final',
+          playerA: 'p1',
+          playerB: 'p2',
+          leg1: { a: 3, b: 0 },
+          leg2: { a: null, b: null },
+          penaltyWinner: null,
+          confirmed: true,
+          winnerTo: null,
+          loserTo: null,
+          winner: 'p1',
+          loser: 'p2',
+        },
+        {
+          id: 'TP',
+          round: 'third_place',
+          playerA: 'p3',
+          playerB: 'p4',
+          leg1: { a: 1, b: 2 },
+          leg2: { a: null, b: null },
+          penaltyWinner: null,
+          confirmed: true,
+          winnerTo: null,
+          loserTo: null,
+          winner: 'p4',
+          loser: 'p3',
+        },
+      ];
+
+      // With explicit single_match
+      const podiumExplicit = getPodium(singleMatchSeries, 'single_match');
+      expect(podiumExplicit).toEqual({
+        champion: 'p1',
+        runnerUp: 'p2',
+        third: 'p4',
+        fourth: 'p3',
+      });
+
+      // Without passing matchFormat (defaults to two_legged) -> should fallback and not crash
+      const podiumFallback = getPodium(singleMatchSeries);
+      expect(podiumFallback).toEqual({
+        champion: 'p1',
+        runnerUp: 'p2',
+        third: 'p4',
+        fourth: 'p3',
+      });
+    });
+  });
 });
+
+

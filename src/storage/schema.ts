@@ -14,6 +14,7 @@ export interface AppData {
   stats: Record<PlayerId, PlayerStats>;
   activeTournament: ActiveTournament | null;
   history: TournamentSummary[];
+  customThemes?: string[];
 }
 
 /**
@@ -26,6 +27,7 @@ export function createEmptyAppData(): AppData {
     stats: {},
     activeTournament: null,
     history: [],
+    customThemes: [],
   };
 }
 
@@ -59,6 +61,14 @@ export function isAppData(value: unknown): value is AppData {
   }
 
   if (!Array.isArray(obj['history'])) {
+    return false;
+  }
+
+  if (
+    obj['customThemes'] !== undefined &&
+    (!Array.isArray(obj['customThemes']) ||
+      !obj['customThemes'].every((t) => typeof t === 'string'))
+  ) {
     return false;
   }
 

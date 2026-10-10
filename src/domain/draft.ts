@@ -98,3 +98,54 @@ export function isDraftComplete(
     return typeof team === 'string' && team.trim().length > 0;
   });
 }
+
+/**
+ * Automatically assigns a list of manually entered team names to participants
+ * using Fisher-Yates shuffle (RF-11, RF-52).
+ *
+ * Validations:
+ * - Count of team names must match count of participants.
+ * - All team names must be non-empty strings.
+ * - Team names must be unique (case- and whitespace-insensitive).
+ */
+export function assignTeamsAutomatically(
+  participantIds: readonly PlayerId[],
+  teamNames: readonly string[],
+  rng: RngFn = Math.random
+): Record<PlayerId, string> {
+  if (participantIds.length !== teamNames.length) {
+    throw new Error(
+      `La cantidad de equipos (${teamNames.length}) no coincide con la cantidad de participantes (${participantIds.length}).`
+    );
+  }
+
+  const sanitizedTeams = teamNames.map((t) => t.trim().replace(/\s+/g, ' '));
+
+  for (const name of sanitizedTeams) {
+    if (name.length === 0) {
+      throw new Error('Todos los nombres de equipos son obligatorios.');
+    }
+  }
+
+  // Check uniqueness
+  const seen = new Set<string>();
+  for (const name of sanitizedTeams) {
+    const normalized = normalizeTeamName(name);
+    if (seen.has(normalized)) {
+      throw new Error('No puede haber nombres de equipos duplicados.');
+    }
+    seen.add(normalized);
+  }
+
+  // Shuffle teams with Fisher-Yates
+  const shuffledTeams = shuffle(sanitizedTeams, rng);
+
+  // Map 1-to-1 to participants
+  const result: Record<PlayerId, string> = {};
+  for (let i = 0; i < participantIds.length; i++) {
+    result[participantIds[i]!] = shuffledTeams[i]!;
+  }
+
+  return result;
+}
+

@@ -35,7 +35,21 @@ export function loadAppData(
       return createEmptyAppData();
     }
 
+    if (parsed.activeTournament) {
+      parsed.activeTournament.tournamentType =
+        parsed.activeTournament.tournamentType ?? 'bracket';
+      parsed.activeTournament.matchFormat =
+        parsed.activeTournament.matchFormat ?? 'two_legged';
+      parsed.activeTournament.leagueMatches =
+        parsed.activeTournament.leagueMatches ?? [];
+    }
+
+    parsed.customThemes = Array.isArray(parsed.customThemes)
+      ? parsed.customThemes
+      : [];
+
     return parsed;
+
   } catch (error) {
     console.error(
       '[Storage] Failed to read or parse localStorage data. Falling back to default empty state.',

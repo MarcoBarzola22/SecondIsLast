@@ -3,6 +3,7 @@ import {
   formatPlayerName,
   isDuplicatePlayer,
   normalizeName,
+  removePlayer,
   sanitizeName,
   validatePlayerInput,
 } from '../players';
@@ -116,4 +117,26 @@ describe('players - domain logic', () => {
       ).toBe('Gómez, Juan Carlos');
     });
   });
+
+  describe('removePlayer (RF-46)', () => {
+    const playersList: Player[] = [
+      { id: 'p1', firstName: 'Marco', lastName: 'Barzola', createdAt: '2026-10-09T00:00:00Z' },
+      { id: 'p2', firstName: 'Lucas', lastName: 'Fernández', createdAt: '2026-10-09T00:00:00Z' },
+      { id: 'p3', firstName: 'Mateo', lastName: 'Pérez', createdAt: '2026-10-09T00:00:00Z' },
+    ];
+
+    it('removes the specified player without mutating the original array', () => {
+      const result = removePlayer(playersList, 'p2');
+      expect(result).toHaveLength(2);
+      expect(result.map((p) => p.id)).toEqual(['p1', 'p3']);
+      expect(playersList).toHaveLength(3); // immutability check
+    });
+
+    it('returns all players if the target id is not found', () => {
+      const result = removePlayer(playersList, 'non-existent');
+      expect(result).toHaveLength(3);
+      expect(result.map((p) => p.id)).toEqual(['p1', 'p2', 'p3']);
+    });
+  });
 });
+

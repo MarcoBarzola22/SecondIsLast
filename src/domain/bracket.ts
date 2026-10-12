@@ -59,7 +59,7 @@ function createSeries(
  */
 export function generateBracket(
   participantIds: readonly PlayerId[],
-  rng: RngFn = Math.random
+  rng: RngFn | null = Math.random
 ): BracketGenerationResult {
   const count = participantIds.length;
   if (count < 4 || count > 10) {
@@ -74,7 +74,7 @@ export function generateBracket(
     throw new Error('No se pueden generar llaves con participantes duplicados.');
   }
 
-  const p = shuffle(participantIds, rng);
+  const p = rng === null ? [...participantIds] : shuffle(participantIds, rng);
 
   // Common final rounds (RF-18)
   const finalSeries = createSeries('F', 'final', null, null, null, null);
@@ -471,3 +471,404 @@ export function generateBracket(
     shuffledOrder: p,
   };
 }
+
+/**
+ * Generates bracket from a pre-defined manual or deterministic order (RF-87).
+ */
+export function generateBracketFromOrder(
+  orderedParticipantIds: readonly PlayerId[]
+): BracketGenerationResult {
+  return generateBracket(orderedParticipantIds, null);
+}
+
+export interface MatchupSlotGroup {
+  id: string;
+  title: string;
+  type: 'matchup' | 'bye';
+  description?: string;
+  slots: { index: number; label: string }[];
+}
+
+/**
+ * Returns UI slot groupings for manual matchup configuration (RF-87).
+ */
+export function getMatchupSlotGroups(count: number): MatchupSlotGroup[] {
+  switch (count) {
+    case 4:
+      return [
+        {
+          id: 'SF1',
+          title: 'Semifinal 1',
+          type: 'matchup',
+          slots: [
+            { index: 0, label: 'Jugador 1' },
+            { index: 1, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'SF2',
+          title: 'Semifinal 2',
+          type: 'matchup',
+          slots: [
+            { index: 2, label: 'Jugador 1' },
+            { index: 3, label: 'Jugador 2' },
+          ],
+        },
+      ];
+    case 5:
+      return [
+        {
+          id: 'QF1',
+          title: 'Cuartos de Final (Play-in)',
+          type: 'matchup',
+          description: 'El ganador avanza a Semifinal 1',
+          slots: [
+            { index: 0, label: 'Jugador 1' },
+            { index: 1, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'BYE1',
+          title: 'Pase a Semifinal 1 (Bye)',
+          type: 'bye',
+          description: 'Espera en Semis al ganador de Cuartos',
+          slots: [{ index: 2, label: 'Clasificado a Semifinal 1' }],
+        },
+        {
+          id: 'SF2',
+          title: 'Semifinal 2 Directa',
+          type: 'matchup',
+          description: 'Ambos inician directo en Semifinales',
+          slots: [
+            { index: 3, label: 'Jugador 1' },
+            { index: 4, label: 'Jugador 2' },
+          ],
+        },
+      ];
+    case 6:
+      return [
+        {
+          id: 'QF1',
+          title: 'Cuartos de Final 1',
+          type: 'matchup',
+          description: 'El ganador avanza a Semifinal 1',
+          slots: [
+            { index: 0, label: 'Jugador 1' },
+            { index: 1, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'QF2',
+          title: 'Cuartos de Final 2',
+          type: 'matchup',
+          description: 'El ganador avanza a Semifinal 2',
+          slots: [
+            { index: 2, label: 'Jugador 1' },
+            { index: 3, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'BYE1',
+          title: 'Pase a Semifinal 1 (Bye)',
+          type: 'bye',
+          description: 'Espera en Semis al ganador de Cuartos 1',
+          slots: [{ index: 4, label: 'Clasificado a Semifinal 1' }],
+        },
+        {
+          id: 'BYE2',
+          title: 'Pase a Semifinal 2 (Bye)',
+          type: 'bye',
+          description: 'Espera en Semis al ganador de Cuartos 2',
+          slots: [{ index: 5, label: 'Clasificado a Semifinal 2' }],
+        },
+      ];
+    case 7:
+      return [
+        {
+          id: 'QF1',
+          title: 'Cuartos de Final 1',
+          type: 'matchup',
+          description: 'El ganador avanza a Semifinal 1',
+          slots: [
+            { index: 0, label: 'Jugador 1' },
+            { index: 1, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'QF2',
+          title: 'Cuartos de Final 2',
+          type: 'matchup',
+          description: 'El ganador avanza a Semifinal 1',
+          slots: [
+            { index: 2, label: 'Jugador 1' },
+            { index: 3, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'QF3',
+          title: 'Cuartos de Final 3',
+          type: 'matchup',
+          description: 'El ganador avanza a Semifinal 2',
+          slots: [
+            { index: 4, label: 'Jugador 1' },
+            { index: 5, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'BYE1',
+          title: 'Pase a Semifinal 2 (Bye)',
+          type: 'bye',
+          description: 'Espera en Semis al ganador de Cuartos 3',
+          slots: [{ index: 6, label: 'Clasificado a Semifinal 2' }],
+        },
+      ];
+    case 8:
+      return [
+        {
+          id: 'QF1',
+          title: 'Cuartos de Final 1',
+          type: 'matchup',
+          slots: [
+            { index: 0, label: 'Jugador 1' },
+            { index: 1, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'QF2',
+          title: 'Cuartos de Final 2',
+          type: 'matchup',
+          slots: [
+            { index: 2, label: 'Jugador 1' },
+            { index: 3, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'QF3',
+          title: 'Cuartos de Final 3',
+          type: 'matchup',
+          slots: [
+            { index: 4, label: 'Jugador 1' },
+            { index: 5, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'QF4',
+          title: 'Cuartos de Final 4',
+          type: 'matchup',
+          slots: [
+            { index: 6, label: 'Jugador 1' },
+            { index: 7, label: 'Jugador 2' },
+          ],
+        },
+      ];
+    case 9:
+      return [
+        {
+          id: 'R16_1',
+          title: 'Octavos de Final (Play-in)',
+          type: 'matchup',
+          description: 'El ganador avanza a Cuartos 1',
+          slots: [
+            { index: 0, label: 'Jugador 1' },
+            { index: 1, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'BYE1',
+          title: 'Pase a Cuartos 1 (Bye)',
+          type: 'bye',
+          description: 'Espera al ganador del Play-in',
+          slots: [{ index: 2, label: 'Clasificado a Cuartos 1' }],
+        },
+        {
+          id: 'QF2',
+          title: 'Cuartos de Final 2',
+          type: 'matchup',
+          slots: [
+            { index: 3, label: 'Jugador 1' },
+            { index: 4, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'QF3',
+          title: 'Cuartos de Final 3',
+          type: 'matchup',
+          slots: [
+            { index: 5, label: 'Jugador 1' },
+            { index: 6, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'QF4',
+          title: 'Cuartos de Final 4',
+          type: 'matchup',
+          slots: [
+            { index: 7, label: 'Jugador 1' },
+            { index: 8, label: 'Jugador 2' },
+          ],
+        },
+      ];
+    case 10:
+      return [
+        {
+          id: 'R16_1',
+          title: 'Octavos de Final 1 (Play-in)',
+          type: 'matchup',
+          description: 'El ganador avanza a Cuartos 1',
+          slots: [
+            { index: 0, label: 'Jugador 1' },
+            { index: 1, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'R16_2',
+          title: 'Octavos de Final 2 (Play-in)',
+          type: 'matchup',
+          description: 'El ganador avanza a Cuartos 3',
+          slots: [
+            { index: 2, label: 'Jugador 1' },
+            { index: 3, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'BYE1',
+          title: 'Pase a Cuartos 1 (Bye)',
+          type: 'bye',
+          description: 'Espera al ganador de Octavos 1',
+          slots: [{ index: 4, label: 'Clasificado a Cuartos 1' }],
+        },
+        {
+          id: 'QF2',
+          title: 'Cuartos de Final 2',
+          type: 'matchup',
+          slots: [
+            { index: 5, label: 'Jugador 1' },
+            { index: 6, label: 'Jugador 2' },
+          ],
+        },
+        {
+          id: 'BYE2',
+          title: 'Pase a Cuartos 3 (Bye)',
+          type: 'bye',
+          description: 'Espera al ganador de Octavos 2',
+          slots: [{ index: 7, label: 'Clasificado a Cuartos 3' }],
+        },
+        {
+          id: 'QF4',
+          title: 'Cuartos de Final 4',
+          type: 'matchup',
+          slots: [
+            { index: 8, label: 'Jugador 1' },
+            { index: 9, label: 'Jugador 2' },
+          ],
+        },
+      ];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Extracts the participant order from generated series slots, filling any gaps with fallbackIds (RF-87).
+ */
+export function extractParticipantOrderFromSeries(
+  series: Series[],
+  count: number,
+  fallbackIds: readonly PlayerId[] = []
+): PlayerId[] {
+  const result: (PlayerId | null)[] = new Array(count).fill(null);
+  const findS = (id1: string, id2?: string) =>
+    series.find((s) => s.id === id1 || (id2 ? s.id === id2 : false));
+
+  if (count === 4) {
+    const s1 = findS('SF1', 'WB_SF1');
+    const s2 = findS('SF2', 'WB_SF2');
+    result[0] = s1?.playerA ?? null;
+    result[1] = s1?.playerB ?? null;
+    result[2] = s2?.playerA ?? null;
+    result[3] = s2?.playerB ?? null;
+  } else if (count === 5) {
+    const qf1 = findS('QF1', 'WB_QF1');
+    const sf1 = findS('SF1', 'WB_SF1');
+    const sf2 = findS('SF2', 'WB_SF2');
+    result[0] = qf1?.playerA ?? null;
+    result[1] = qf1?.playerB ?? null;
+    result[2] = sf1?.playerB ?? null;
+    result[3] = sf2?.playerA ?? null;
+    result[4] = sf2?.playerB ?? null;
+  } else if (count === 6) {
+    const qf1 = findS('QF1', 'WB_QF1');
+    const qf2 = findS('QF2', 'WB_QF2');
+    const sf1 = findS('SF1', 'WB_SF1');
+    const sf2 = findS('SF2', 'WB_SF2');
+    result[0] = qf1?.playerA ?? null;
+    result[1] = qf1?.playerB ?? null;
+    result[2] = qf2?.playerA ?? null;
+    result[3] = qf2?.playerB ?? null;
+    result[4] = sf1?.playerB ?? null;
+    result[5] = sf2?.playerB ?? null;
+  } else if (count === 7) {
+    const qf1 = findS('QF1', 'WB_QF1');
+    const qf2 = findS('QF2', 'WB_QF2');
+    const qf3 = findS('QF3', 'WB_QF3');
+    const sf2 = findS('SF2', 'WB_SF2');
+    result[0] = qf1?.playerA ?? null;
+    result[1] = qf1?.playerB ?? null;
+    result[2] = qf2?.playerA ?? null;
+    result[3] = qf2?.playerB ?? null;
+    result[4] = qf3?.playerA ?? null;
+    result[5] = qf3?.playerB ?? null;
+    result[6] = sf2?.playerB ?? null;
+  } else if (count === 8) {
+    const qf1 = findS('QF1', 'WB_QF1');
+    const qf2 = findS('QF2', 'WB_QF2');
+    const qf3 = findS('QF3', 'WB_QF3');
+    const qf4 = findS('QF4', 'WB_QF4');
+    result[0] = qf1?.playerA ?? null;
+    result[1] = qf1?.playerB ?? null;
+    result[2] = qf2?.playerA ?? null;
+    result[3] = qf2?.playerB ?? null;
+    result[4] = qf3?.playerA ?? null;
+    result[5] = qf3?.playerB ?? null;
+    result[6] = qf4?.playerA ?? null;
+    result[7] = qf4?.playerB ?? null;
+  } else if (count === 9) {
+    const r16_1 = findS('R16_1', 'WB_R16_1');
+    const qf1 = findS('QF1', 'WB_QF1');
+    const qf2 = findS('QF2', 'WB_QF2');
+    const qf3 = findS('QF3', 'WB_QF3');
+    const qf4 = findS('QF4', 'WB_QF4');
+    result[0] = r16_1?.playerA ?? null;
+    result[1] = r16_1?.playerB ?? null;
+    result[2] = qf1?.playerB ?? null;
+    result[3] = qf2?.playerA ?? null;
+    result[4] = qf2?.playerB ?? null;
+    result[5] = qf3?.playerA ?? null;
+    result[6] = qf3?.playerB ?? null;
+    result[7] = qf4?.playerA ?? null;
+    result[8] = qf4?.playerB ?? null;
+  } else if (count === 10) {
+    const r16_1 = findS('R16_1', 'WB_R16_1');
+    const r16_2 = findS('R16_2', 'WB_R16_2');
+    const qf1 = findS('QF1', 'WB_QF1');
+    const qf2 = findS('QF2', 'WB_QF2');
+    const qf3 = findS('QF3', 'WB_QF3');
+    const qf4 = findS('QF4', 'WB_QF4');
+    result[0] = r16_1?.playerA ?? null;
+    result[1] = r16_1?.playerB ?? null;
+    result[2] = r16_2?.playerA ?? null;
+    result[3] = r16_2?.playerB ?? null;
+    result[4] = qf1?.playerB ?? null;
+    result[5] = qf2?.playerA ?? null;
+    result[6] = qf2?.playerB ?? null;
+    result[7] = qf3?.playerB ?? null;
+    result[8] = qf4?.playerA ?? null;
+    result[9] = qf4?.playerB ?? null;
+  }
+
+  const assigned = new Set(result.filter((id): id is PlayerId => id !== null));
+  const remaining = fallbackIds.filter((id) => !assigned.has(id));
+  let remIdx = 0;
+  return result.map((id) => id ?? remaining[remIdx++] ?? '');
+}
+

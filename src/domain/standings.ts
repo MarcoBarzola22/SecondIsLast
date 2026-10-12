@@ -89,7 +89,7 @@ export function getPodium(
   };
 }
 
-function createEmptyPlayerStats(playerId: PlayerId): PlayerStats {
+export function createEmptyPlayerStats(playerId: PlayerId): PlayerStats {
   return {
     playerId,
     pts: 0,
@@ -192,7 +192,7 @@ export function applyStats(
   // Add deltas
   for (const [id, delta] of Object.entries(deltaStats)) {
     const current = result[id] ?? createEmptyPlayerStats(id);
-    result[id] = {
+    const updated: PlayerStats = {
       playerId: id,
       pts: current.pts + delta.pts,
       pj: current.pj + delta.pj,
@@ -202,6 +202,16 @@ export function applyStats(
       gc: current.gc + delta.gc,
       tj: current.tj + delta.tj,
     };
+    if (current.yellowCards !== undefined || delta.yellowCards !== undefined) {
+      updated.yellowCards = (current.yellowCards ?? 0) + (delta.yellowCards ?? 0);
+    }
+    if (current.redCards !== undefined || delta.redCards !== undefined) {
+      updated.redCards = (current.redCards ?? 0) + (delta.redCards ?? 0);
+    }
+    if (current.podiums !== undefined || delta.podiums !== undefined) {
+      updated.podiums = (current.podiums ?? 0) + (delta.podiums ?? 0);
+    }
+    result[id] = updated;
   }
 
   return result;

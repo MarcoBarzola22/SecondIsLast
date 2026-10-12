@@ -90,4 +90,44 @@ describe('storage adapter (Principle 5, Principle 6, RF-4, RF-39, RF-41, RF-42)'
 
     consoleSpy.mockRestore();
   });
+
+  it('transparently migrates schemaVersion: 1 to schemaVersion: 2 with safe defaults (RF-80)', () => {
+    const legacyV1 = {
+      schemaVersion: 1,
+      players: [
+        { id: 'p1', firstName: 'Lionel', lastName: 'Messi', createdAt: '2026-01-01' },
+      ],
+      stats: {
+        p1: { playerId: 'p1', pts: 10, pj: 3, pg: 3, pp: 0, gf: 9, gc: 1, tj: 1 },
+      },
+      activeTournament: null,
+      history: [
+        {
+          id: 'hist-1',
+          finishedAt: '2026-02-01T12:00:00Z',
+          theme: 'Champions',
+          participants: [{ playerId: 'p1', team: 'Barca' }],
+          podium: { champion: 'p1', runnerUp: 'p2', third: 'p3', fourth: 'p4' },
+        },
+      ],
+      customThemes: ['Anime'],
+    };
+
+    mockStore[STORAGE_KEY] = JSON.stringify(legacyV1);
+
+    const loaded = loadAppData(mockStorage);
+
+    expect(loaded.schemaVersion).toBe(2);
+    expect(loaded.players).toHaveLength(1);
+    expect(loaded.players[0].id).toBe('p1');
+    expect(loaded.stats['p1'].pts).toBe(10);
+    expect(loaded.history).toHaveLength(1);
+    expect(loaded.customThemes).toEqual(['Anime']);
+    expect(loaded.headToHead).toEqual({});
+    expect(loaded.annualRankings).toEqual({});
+
+    // Verify auto-saved back to storage as v2
+    const rawStored = JSON.parse(mockStore[STORAGE_KEY]);
+    expect(rawStored.schemaVersion).toBe(2);
+  });
 });

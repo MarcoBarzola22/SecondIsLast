@@ -1,14 +1,15 @@
 import {
   createEmptyAppData,
-  isAppData,
+  migrateAppData,
   type AppData,
 } from './schema';
 
 export const STORAGE_KEY = 'second-is-last:data';
 
 /**
- * Loads and validates application state from local storage (RF-4, RF-40, RF-41).
+ * Loads and validates application state from local storage (RF-4, RF-40, RF-41, RF-80).
  * If storage is empty, corrupted, or schema is unknown, falls back cleanly to empty AppData without throwing (Principle 5).
+ * Automatically migrates older schema versions (v1 to v2) transparently (RF-80).
  */
 export function loadAppData(
   storage?: Storage
@@ -27,7 +28,9 @@ export function loadAppData(
     }
 
     const parsed = JSON.parse(raw);
-    if (!isAppData(parsed)) {
+    const migrated = migrateAppData(parsed);
+
+    if (!migrated) {
       console.error(
         '[Storage] Invalid or incompatible AppData structure. Falling back to default empty state.',
         parsed
@@ -35,20 +38,35 @@ export function loadAppData(
       return createEmptyAppData();
     }
 
-    if (parsed.activeTournament) {
-      parsed.activeTournament.tournamentType =
-        parsed.activeTournament.tournamentType ?? 'bracket';
-      parsed.activeTournament.matchFormat =
-        parsed.activeTournament.matchFormat ?? 'two_legged';
-      parsed.activeTournament.leagueMatches =
-        parsed.activeTournament.leagueMatches ?? [];
+    if (migrated.activeTournament) {
+      migrated.activeTournament.tournamentType =
+        migrated.activeTournament.tournamentType ?? 'bracket';
+      migrated.activeTournament.matchFormat =
+        migrated.activeTournament.matchFormat ?? 'two_legged';
+      migrated.activeTournament.leagueMatches =
+        migrated.activeTournament.leagueMatches ?? [];
     }
 
-    parsed.customThemes = Array.isArray(parsed.customThemes)
-      ? parsed.customThemes
+    migrated.customThemes = Array.isArray(migrated.customThemes)
+      ? migrated.customThemes
       : [];
 
-    return parsed;
+    migrated.headToHead =
+      migrated.headToHead && typeof migrated.headToHead === 'object'
+        ? migrated.headToHead
+        : {};
+
+    migrated.annualRankings =
+      migrated.annualRankings && typeof migrated.annualRankings === 'object'
+        ? migrated.annualRankings
+        : {};
+
+    // Auto-save migrated v2 schema back to storage if it was upgraded from v1
+    if (parsed.schemaVersion === 1) {
+      saveAppData(migrated, targetStorage);
+    }
+
+    return migrated;
 
   } catch (error) {
     console.error(

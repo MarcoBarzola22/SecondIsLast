@@ -2,6 +2,11 @@ import { Award, ChevronRight, Medal, Trophy } from 'lucide-react';
 import { formatPlayerName } from '../../domain/players';
 import { isBracketComplete } from '../../domain/series';
 import { getPodium } from '../../domain/standings';
+import {
+  getDoubleEliminationPodium,
+  isDoubleEliminationComplete,
+} from '../../domain/doubleElimination';
+import type { Podium } from '../../domain/types';
 import { useAppDispatch, useAppState } from '../../state/AppContext';
 import { PrimaryButton } from '../ui/Buttons';
 import { Panel } from '../ui/Panel';
@@ -16,24 +21,37 @@ export function PodiumPanel({ onTournamentFinished }: PodiumPanelProps) {
 
   if (!activeTournament) return null;
 
-  const finalSeries = activeTournament.series.find((s) => s.id === 'F');
-  const thirdPlaceSeries = activeTournament.series.find((s) => s.id === 'TP');
-
-  // Render only when both Final and Third place exist and are strictly 100% confirmed (RF-30)
-  if (
-    !isBracketComplete(activeTournament.series) ||
-    !finalSeries ||
-    !finalSeries.confirmed ||
-    !thirdPlaceSeries ||
-    !thirdPlaceSeries.confirmed
-  ) {
-    return null;
-  }
+  const isDoubleElimination =
+    activeTournament.phase === 'double_elimination' ||
+    activeTournament.tournamentType === 'double_elimination';
 
   const matchFormat = activeTournament.matchFormat ?? 'two_legged';
-  let podium: ReturnType<typeof getPodium>;
+
+  if (isDoubleElimination) {
+    if (!isDoubleEliminationComplete(activeTournament.series, matchFormat)) {
+      return null;
+    }
+  } else {
+    const finalSeries = activeTournament.series.find((s) => s.id === 'F');
+    const thirdPlaceSeries = activeTournament.series.find((s) => s.id === 'TP');
+
+    // Render only when both Final and Third place exist and are strictly 100% confirmed (RF-30)
+    if (
+      !isBracketComplete(activeTournament.series) ||
+      !finalSeries ||
+      !finalSeries.confirmed ||
+      !thirdPlaceSeries ||
+      !thirdPlaceSeries.confirmed
+    ) {
+      return null;
+    }
+  }
+
+  let podium: Podium;
   try {
-    podium = getPodium(activeTournament.series, matchFormat);
+    podium = isDoubleElimination
+      ? getDoubleEliminationPodium(activeTournament.series, matchFormat)
+      : getPodium(activeTournament.series, matchFormat);
   } catch (err) {
     console.error('[PodiumPanel] Error al obtener el podio:', err);
     return null;

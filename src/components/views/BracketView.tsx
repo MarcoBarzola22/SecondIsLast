@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { useAppState } from '../../state/AppContext';
 import { Panel } from '../ui/Panel';
 import { SeriesCard } from './SeriesCard';
+import { ParticipantsWalkoverPanel } from './ParticipantsWalkoverPanel';
+import { ManualMatchupsPanel } from './ManualMatchupsPanel';
 
 interface BracketViewProps {
   children?: ReactNode; // Podium panel placeholder for T15
@@ -36,6 +38,9 @@ export function BracketView({ children }: BracketViewProps) {
 
   return (
     <div className="space-y-6">
+      {/* Panel de Armado Manual de Cruces y Byes (RF-87) */}
+      <ManualMatchupsPanel mode="bracket" />
+
       <Panel
         title="Llaves del Torneo"
         subtitle={theme ? `Temática: ${theme} · ${formatLabel}` : formatLabel}
@@ -139,6 +144,9 @@ export function BracketView({ children }: BracketViewProps) {
           </div>
         </div>
       </Panel>
+
+      {/* Participantes y Gestión de Abandonos (RF-64, RF-66) */}
+      <ParticipantsWalkoverPanel />
 
       {/* Podium panel slot (T15) */}
       {children}

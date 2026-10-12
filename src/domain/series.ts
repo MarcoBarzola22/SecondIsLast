@@ -1,4 +1,5 @@
 import type {
+  CardCounts,
   MatchFormat,
   PlayerId,
   Series,
@@ -186,7 +187,8 @@ export function setLegScore(
   leg: 'leg1' | 'leg2',
   side: Side,
   value: number | null,
-  matchFormat: MatchFormat = 'two_legged'
+  matchFormat: MatchFormat = 'two_legged',
+  cards?: CardCounts
 ): Series[] {
   if (value !== null && !isValidGoal(value)) {
     throw new Error(
@@ -197,7 +199,12 @@ export function setLegScore(
   return seriesList.map((s) => {
     if (s.id !== seriesId) return s;
 
-    const updatedLeg = { ...s[leg], [side]: value };
+    const cardsField = side === 'a' ? 'cardsA' : 'cardsB';
+    const updatedLeg = {
+      ...s[leg],
+      [side]: value,
+      ...(cards !== undefined ? { [cardsField]: cards } : {}),
+    };
     const updatedSeries: Series = {
       ...s,
       [leg]: updatedLeg,

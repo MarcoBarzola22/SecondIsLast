@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { generateBracket } from '../bracket';
+import {
+  generateBracket,
+  generateBracketFromOrder,
+  getMatchupSlotGroups,
+  extractParticipantOrderFromSeries,
+} from '../bracket';
 import { confirmSeries, setLegScore } from '../series';
 import { createMulberry32 } from './helpers';
 
@@ -389,5 +394,35 @@ describe('bracket - asymmetric generation (RF-17, RF-18, RF-19)', () => {
     expect(r1.shuffledOrder).toEqual(r2.shuffledOrder);
     expect(r1.byes).toEqual(r2.byes);
     expect(r1.series).toEqual(r2.series);
+  });
+
+  describe('manual matchup configuration and ordering (RF-87)', () => {
+    it('generateBracketFromOrder generates bracket respecting exact given order without shuffling', () => {
+      const players = ['A', 'B', 'C', 'D'];
+      const result = generateBracketFromOrder(players);
+      expect(result.shuffledOrder).toEqual(['A', 'B', 'C', 'D']);
+      const sf1 = result.series.find((s) => s.id === 'SF1')!;
+      const sf2 = result.series.find((s) => s.id === 'SF2')!;
+      expect(sf1.playerA).toBe('A');
+      expect(sf1.playerB).toBe('B');
+      expect(sf2.playerA).toBe('C');
+      expect(sf2.playerB).toBe('D');
+    });
+
+    it('getMatchupSlotGroups returns structured slots for counts 4 to 10', () => {
+      for (let count = 4; count <= 10; count++) {
+        const groups = getMatchupSlotGroups(count);
+        expect(groups.length).toBeGreaterThan(0);
+        const totalSlots = groups.reduce((acc, g) => acc + g.slots.length, 0);
+        expect(totalSlots).toBe(count);
+      }
+    });
+
+    it('extractParticipantOrderFromSeries faithfully extracts participants from generated series', () => {
+      const players = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'];
+      const bracket = generateBracketFromOrder(players);
+      const extracted = extractParticipantOrderFromSeries(bracket.series, 6, players);
+      expect(extracted).toEqual(players);
+    });
   });
 });

@@ -1,10 +1,10 @@
-import { Trophy, CheckCircle, RotateCcw } from 'lucide-react';
+import { Trophy, CheckCircle, RotateCcw, AlertTriangle } from 'lucide-react';
 import {
   canEditSeries,
   getSeriesResult,
   isSeriesReady,
 } from '../../domain/series';
-import type { PlayerId, Series, Side } from '../../domain/types';
+import type { CardCounts, PlayerId, Series, Side } from '../../domain/types';
 import { useAppDispatch, useAppState } from '../../state/AppContext';
 import { PrimaryButton, SecondaryButton } from '../ui/Buttons';
 
@@ -22,6 +22,11 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
   const { byes, teams, series: allSeries } = activeTournament;
   const matchFormat = activeTournament.matchFormat ?? 'two_legged';
   const isSingleMatch = matchFormat === 'single_match';
+
+  const walkoverPlayerIds = activeTournament.walkoverPlayerIds ?? [];
+  const isWalkoverA = series.playerA ? walkoverPlayerIds.includes(series.playerA) : false;
+  const isWalkoverB = series.playerB ? walkoverPlayerIds.includes(series.playerB) : false;
+  const isWalkoverSeries = isWalkoverA || isWalkoverB;
 
   const playersMap = new Map(players.map((p) => [p.id, p]));
 
@@ -49,7 +54,8 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
     side: Side,
     valueStr: string
   ) => {
-    if (series.confirmed) return;
+    if (series.confirmed || isWalkoverSeries) return;
+    const existingCards = side === 'a' ? series[leg].cardsA : series[leg].cardsB;
     const trimmed = valueStr.trim();
     if (trimmed === '') {
       dispatch({
@@ -58,6 +64,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
         leg,
         side,
         value: null,
+        cards: existingCards,
       });
       return;
     }
@@ -70,11 +77,59 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
         leg,
         side,
         value: parsed,
+        cards: existingCards,
+      });
+    }
+  };
+
+  const handleCardChange = (
+    leg: 'leg1' | 'leg2',
+    side: Side,
+    cardType: 'yellow' | 'red',
+    valueStr: string
+  ) => {
+    if (series.confirmed || isWalkoverSeries) return;
+    const currentCards =
+      (side === 'a' ? series[leg].cardsA : series[leg].cardsB) ?? {
+        yellow: 0,
+        red: 0,
+      };
+    const trimmed = valueStr.trim();
+    if (trimmed === '') {
+      const updatedCards: CardCounts = {
+        ...currentCards,
+        [cardType]: 0,
+      };
+      dispatch({
+        type: 'LEG_SCORE_SET',
+        seriesId: series.id,
+        leg,
+        side,
+        value: series[leg][side],
+        cards: updatedCards,
+      });
+      return;
+    }
+
+    const parsed = parseInt(trimmed, 10);
+    if (!isNaN(parsed) && parsed >= 0 && parsed <= 99) {
+      const updatedCards: CardCounts = {
+        ...currentCards,
+        [cardType]: parsed,
+      };
+      dispatch({
+        type: 'LEG_SCORE_SET',
+        seriesId: series.id,
+        leg,
+        side,
+        value: series[leg][side],
+        cards: updatedCards,
       });
     }
   };
 
   const handlePenaltyChange = (winnerId: PlayerId | null) => {
+    if (isWalkoverSeries) return;
     dispatch({
       type: 'PENALTY_WINNER_SET',
       seriesId: series.id,
@@ -83,12 +138,12 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
   };
 
   const handleConfirm = () => {
-    if (!result.canConfirm) return;
+    if (!result.canConfirm || isWalkoverSeries) return;
     dispatch({ type: 'SERIES_CONFIRMED', seriesId: series.id });
   };
 
   const handleReopen = () => {
-    if (!editable) return;
+    if (!editable || isWalkoverSeries) return;
     dispatch({ type: 'SERIES_EDIT_REQUESTED', seriesId: series.id });
   };
 
@@ -96,22 +151,36 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
     name: string,
     team: string,
     isBye: boolean,
-    isWinner: boolean
+    isWinner: boolean,
+    isWalkover: boolean
   ) => (
     <div
       className={`flex items-center justify-between gap-2 px-4 py-2.5 transition ${
-        isWinner ? 'bg-primary/15' : 'bg-background/40'
+        isWalkover
+          ? 'bg-destructive/10'
+          : isWinner
+            ? 'bg-primary/15'
+            : 'bg-background/40'
       }`}
     >
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p
             className={`truncate font-semibold ${
-              isWinner ? 'text-primary' : 'text-foreground'
+              isWalkover
+                ? 'text-destructive line-through'
+                : isWinner
+                  ? 'text-primary'
+                  : 'text-foreground'
             }`}
           >
             {name}
           </p>
+          {isWalkover && (
+            <span className="rounded border border-destructive/40 bg-destructive/20 px-1.5 py-0.5 font-display text-[10px] font-bold uppercase tracking-wider text-destructive flex items-center gap-0.5">
+              <AlertTriangle className="h-2.5 w-2.5" /> W.O.
+            </span>
+          )}
           {isBye && (
             <span className="rounded border border-accent/40 bg-accent/20 px-1.5 py-0.5 font-display text-[10px] font-bold uppercase tracking-wider text-accent">
               Pase directo
@@ -128,11 +197,13 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
   return (
     <div
       className={`overflow-hidden rounded-md border transition ${
-        series.confirmed
-          ? 'border-border/80 bg-card/90'
-          : ready
-            ? 'border-accent/70 bg-card shadow-[0_0_15px_rgba(56,189,248,0.15)]'
-            : 'border-border/40 bg-card/40 opacity-70'
+        isWalkoverSeries
+          ? 'border-destructive/40 bg-card/80 opacity-90'
+          : series.confirmed
+            ? 'border-border/80 bg-card/90'
+            : ready
+              ? 'border-accent/70 bg-card shadow-[0_0_15px_rgba(56,189,248,0.15)]'
+              : 'border-border/40 bg-card/40 opacity-70'
       }`}
     >
       {/* Header de la serie */}
@@ -140,15 +211,19 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
         <span className="font-display text-xs font-bold uppercase tracking-widest text-accent">
           {label}
         </span>
-        {series.confirmed && (
+        {isWalkoverSeries ? (
+          <span className="flex items-center gap-1 font-display text-[11px] font-bold uppercase tracking-wider text-destructive">
+            <AlertTriangle className="h-3.5 w-3.5" /> W.O. (Abandono)
+          </span>
+        ) : series.confirmed ? (
           <span className="flex items-center gap-1 font-display text-[11px] font-bold uppercase tracking-wider text-primary">
             <CheckCircle className="h-3.5 w-3.5" /> Confirmada
           </span>
-        )}
+        ) : null}
       </div>
 
       {/* Participante A */}
-      {renderSideHeader(nameA, teamA, isByeA, isWinnerA)}
+      {renderSideHeader(nameA, teamA, isByeA, isWinnerA, isWalkoverA)}
 
       {/* Bloque central de resultados */}
       <div className="border-y border-border bg-background/60 p-3">
@@ -156,18 +231,18 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
           <>
             {isSingleMatch ? (
               /* Modalidad Partido Único (RF-21, RF-49) */
-              <div>
+              <div className="space-y-2">
                 <div className="text-center font-display text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
                   <span>Partido Único</span>
                 </div>
 
-                <div className="mt-1.5 flex items-center justify-center">
+                <div className="flex items-center justify-center">
                   <div className="flex items-center justify-center gap-2 rounded bg-background/80 p-1.5 border border-border/50">
                     <input
                       type="number"
                       min={0}
                       max={99}
-                      disabled={series.confirmed}
+                      disabled={series.confirmed || isWalkoverSeries}
                       value={series.leg1.a ?? ''}
                       onChange={(e) =>
                         handleScoreChange('leg1', 'a', e.target.value)
@@ -181,7 +256,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                       type="number"
                       min={0}
                       max={99}
-                      disabled={series.confirmed}
+                      disabled={series.confirmed || isWalkoverSeries}
                       value={series.leg1.b ?? ''}
                       onChange={(e) =>
                         handleScoreChange('leg1', 'b', e.target.value)
@@ -190,6 +265,73 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                       className="h-10 w-12 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
                       title={`Goles de ${nameB}`}
                     />
+                  </div>
+                </div>
+
+                {/* Inputs de Tarjetas (Fair Play) */}
+                <div className="flex items-center justify-between gap-1 rounded bg-background/50 px-2 py-1.5 border border-border/40 text-[11px]">
+                  {/* Tarjetas Jugador A */}
+                  <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1" title={`Tarjetas amarillas de ${nameA}`}>
+                      <span className="inline-block h-3 w-2 rounded-[1px] bg-amber-400 shadow-[0_0_4px_rgba(251,191,36,0.6)]" />
+                      <input
+                        type="number"
+                        min={0}
+                        max={99}
+                        disabled={series.confirmed || isWalkoverSeries}
+                        value={series.leg1.cardsA?.yellow ?? ''}
+                        onChange={(e) => handleCardChange('leg1', 'a', 'yellow', e.target.value)}
+                        placeholder="0"
+                        className="h-6 w-8 rounded-sm border border-field-border bg-field text-center font-mono text-xs font-bold text-foreground outline-none transition focus:border-amber-400 disabled:opacity-80"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1" title={`Tarjetas rojas de ${nameA}`}>
+                      <span className="inline-block h-3 w-2 rounded-[1px] bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.6)]" />
+                      <input
+                        type="number"
+                        min={0}
+                        max={99}
+                        disabled={series.confirmed || isWalkoverSeries}
+                        value={series.leg1.cardsA?.red ?? ''}
+                        onChange={(e) => handleCardChange('leg1', 'a', 'red', e.target.value)}
+                        placeholder="0"
+                        className="h-6 w-8 rounded-sm border border-field-border bg-field text-center font-mono text-xs font-bold text-foreground outline-none transition focus:border-red-400 disabled:opacity-80"
+                      />
+                    </div>
+                  </div>
+
+                  <span className="font-display text-[9px] font-bold uppercase tracking-wider text-muted-foreground select-none">
+                    Tarjetas
+                  </span>
+
+                  {/* Tarjetas Jugador B */}
+                  <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1" title={`Tarjetas amarillas de ${nameB}`}>
+                      <span className="inline-block h-3 w-2 rounded-[1px] bg-amber-400 shadow-[0_0_4px_rgba(251,191,36,0.6)]" />
+                      <input
+                        type="number"
+                        min={0}
+                        max={99}
+                        disabled={series.confirmed || isWalkoverSeries}
+                        value={series.leg1.cardsB?.yellow ?? ''}
+                        onChange={(e) => handleCardChange('leg1', 'b', 'yellow', e.target.value)}
+                        placeholder="0"
+                        className="h-6 w-8 rounded-sm border border-field-border bg-field text-center font-mono text-xs font-bold text-foreground outline-none transition focus:border-amber-400 disabled:opacity-80"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1" title={`Tarjetas rojas de ${nameB}`}>
+                      <span className="inline-block h-3 w-2 rounded-[1px] bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.6)]" />
+                      <input
+                        type="number"
+                        min={0}
+                        max={99}
+                        disabled={series.confirmed || isWalkoverSeries}
+                        value={series.leg1.cardsB?.red ?? ''}
+                        onChange={(e) => handleCardChange('leg1', 'b', 'red', e.target.value)}
+                        placeholder="0"
+                        className="h-6 w-8 rounded-sm border border-field-border bg-field text-center font-mono text-xs font-bold text-foreground outline-none transition focus:border-red-400 disabled:opacity-80"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -205,65 +347,195 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                 {/* Inputs de Ida y Vuelta */}
                 <div className="mt-1.5 grid grid-cols-2 gap-3">
                   {/* Partido de Ida: A es local, B es visitante */}
-                  <div className="flex items-center justify-center gap-1.5 rounded bg-background/80 p-1.5 border border-border/50">
-                    <input
-                      type="number"
-                      min={0}
-                      max={99}
-                      disabled={series.confirmed}
-                      value={series.leg1.a ?? ''}
-                      onChange={(e) =>
-                        handleScoreChange('leg1', 'a', e.target.value)
-                      }
-                      placeholder="0"
-                      className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
-                      title={`Goles de ${nameA} en la Ida (Local)`}
-                    />
-                    <span className="text-muted-foreground font-bold">-</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={99}
-                      disabled={series.confirmed}
-                      value={series.leg1.b ?? ''}
-                      onChange={(e) =>
-                        handleScoreChange('leg1', 'b', e.target.value)
-                      }
-                      placeholder="0"
-                      className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
-                      title={`Goles de ${nameB} en la Ida (Visitante)`}
-                    />
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-center gap-1.5 rounded bg-background/80 p-1.5 border border-border/50">
+                      <input
+                        type="number"
+                        min={0}
+                        max={99}
+                        disabled={series.confirmed || isWalkoverSeries}
+                        value={series.leg1.a ?? ''}
+                        onChange={(e) =>
+                          handleScoreChange('leg1', 'a', e.target.value)
+                        }
+                        placeholder="0"
+                        className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
+                        title={`Goles de ${nameA} en la Ida (Local)`}
+                      />
+                      <span className="text-muted-foreground font-bold">-</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={99}
+                        disabled={series.confirmed || isWalkoverSeries}
+                        value={series.leg1.b ?? ''}
+                        onChange={(e) =>
+                          handleScoreChange('leg1', 'b', e.target.value)
+                        }
+                        placeholder="0"
+                        className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
+                        title={`Goles de ${nameB} en la Ida (Visitante)`}
+                      />
+                    </div>
+
+                    {/* Tarjetas Ida (A local - B visitante) */}
+                    <div className="flex items-center justify-between gap-1 rounded bg-background/50 px-1.5 py-1 border border-border/40 text-[10px]">
+                      {/* A local */}
+                      <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-0.5" title={`Amarillas de ${nameA} (Ida)`}>
+                          <span className="inline-block h-2.5 w-1.5 rounded-[1px] bg-amber-400" />
+                          <input
+                            type="number"
+                            min={0}
+                            max={99}
+                            disabled={series.confirmed || isWalkoverSeries}
+                            value={series.leg1.cardsA?.yellow ?? ''}
+                            onChange={(e) => handleCardChange('leg1', 'a', 'yellow', e.target.value)}
+                            placeholder="0"
+                            className="h-5 w-6 rounded-sm border border-field-border bg-field text-center font-mono text-[11px] font-bold text-foreground outline-none transition focus:border-amber-400 disabled:opacity-80"
+                          />
+                        </div>
+                        <div className="flex items-center gap-0.5" title={`Rojas de ${nameA} (Ida)`}>
+                          <span className="inline-block h-2.5 w-1.5 rounded-[1px] bg-red-500" />
+                          <input
+                            type="number"
+                            min={0}
+                            max={99}
+                            disabled={series.confirmed || isWalkoverSeries}
+                            value={series.leg1.cardsA?.red ?? ''}
+                            onChange={(e) => handleCardChange('leg1', 'a', 'red', e.target.value)}
+                            placeholder="0"
+                            className="h-5 w-6 rounded-sm border border-field-border bg-field text-center font-mono text-[11px] font-bold text-foreground outline-none transition focus:border-red-400 disabled:opacity-80"
+                          />
+                        </div>
+                      </div>
+
+                      {/* B visitante */}
+                      <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-0.5" title={`Amarillas de ${nameB} (Ida)`}>
+                          <span className="inline-block h-2.5 w-1.5 rounded-[1px] bg-amber-400" />
+                          <input
+                            type="number"
+                            min={0}
+                            max={99}
+                            disabled={series.confirmed || isWalkoverSeries}
+                            value={series.leg1.cardsB?.yellow ?? ''}
+                            onChange={(e) => handleCardChange('leg1', 'b', 'yellow', e.target.value)}
+                            placeholder="0"
+                            className="h-5 w-6 rounded-sm border border-field-border bg-field text-center font-mono text-[11px] font-bold text-foreground outline-none transition focus:border-amber-400 disabled:opacity-80"
+                          />
+                        </div>
+                        <div className="flex items-center gap-0.5" title={`Rojas de ${nameB} (Ida)`}>
+                          <span className="inline-block h-2.5 w-1.5 rounded-[1px] bg-red-500" />
+                          <input
+                            type="number"
+                            min={0}
+                            max={99}
+                            disabled={series.confirmed || isWalkoverSeries}
+                            value={series.leg1.cardsB?.red ?? ''}
+                            onChange={(e) => handleCardChange('leg1', 'b', 'red', e.target.value)}
+                            placeholder="0"
+                            className="h-5 w-6 rounded-sm border border-field-border bg-field text-center font-mono text-[11px] font-bold text-foreground outline-none transition focus:border-red-400 disabled:opacity-80"
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Partido de Vuelta: B es local, A es visitante */}
-                  <div className="flex items-center justify-center gap-1.5 rounded bg-background/80 p-1.5 border border-border/50">
-                    <input
-                      type="number"
-                      min={0}
-                      max={99}
-                      disabled={series.confirmed}
-                      value={series.leg2.b ?? ''}
-                      onChange={(e) =>
-                        handleScoreChange('leg2', 'b', e.target.value)
-                      }
-                      placeholder="0"
-                      className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
-                      title={`Goles de ${nameB} en la Vuelta (Local)`}
-                    />
-                    <span className="text-muted-foreground font-bold">-</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={99}
-                      disabled={series.confirmed}
-                      value={series.leg2.a ?? ''}
-                      onChange={(e) =>
-                        handleScoreChange('leg2', 'a', e.target.value)
-                      }
-                      placeholder="0"
-                      className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
-                      title={`Goles de ${nameA} en la Vuelta (Visitante)`}
-                    />
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-center gap-1.5 rounded bg-background/80 p-1.5 border border-border/50">
+                      <input
+                        type="number"
+                        min={0}
+                        max={99}
+                        disabled={series.confirmed || isWalkoverSeries}
+                        value={series.leg2.b ?? ''}
+                        onChange={(e) =>
+                          handleScoreChange('leg2', 'b', e.target.value)
+                        }
+                        placeholder="0"
+                        className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
+                        title={`Goles de ${nameB} en la Vuelta (Local)`}
+                      />
+                      <span className="text-muted-foreground font-bold">-</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={99}
+                        disabled={series.confirmed || isWalkoverSeries}
+                        value={series.leg2.a ?? ''}
+                        onChange={(e) =>
+                          handleScoreChange('leg2', 'a', e.target.value)
+                        }
+                        placeholder="0"
+                        className="h-10 w-11 rounded-sm border-2 border-field-border bg-field text-center font-display text-lg font-bold text-foreground outline-none transition focus:border-accent focus:glow-blue disabled:opacity-80"
+                        title={`Goles de ${nameA} en la Vuelta (Visitante)`}
+                      />
+                    </div>
+
+                    {/* Tarjetas Vuelta (B local - A visitante) */}
+                    <div className="flex items-center justify-between gap-1 rounded bg-background/50 px-1.5 py-1 border border-border/40 text-[10px]">
+                      {/* B local */}
+                      <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-0.5" title={`Amarillas de ${nameB} (Vuelta)`}>
+                          <span className="inline-block h-2.5 w-1.5 rounded-[1px] bg-amber-400" />
+                          <input
+                            type="number"
+                            min={0}
+                            max={99}
+                            disabled={series.confirmed || isWalkoverSeries}
+                            value={series.leg2.cardsB?.yellow ?? ''}
+                            onChange={(e) => handleCardChange('leg2', 'b', 'yellow', e.target.value)}
+                            placeholder="0"
+                            className="h-5 w-6 rounded-sm border border-field-border bg-field text-center font-mono text-[11px] font-bold text-foreground outline-none transition focus:border-amber-400 disabled:opacity-80"
+                          />
+                        </div>
+                        <div className="flex items-center gap-0.5" title={`Rojas de ${nameB} (Vuelta)`}>
+                          <span className="inline-block h-2.5 w-1.5 rounded-[1px] bg-red-500" />
+                          <input
+                            type="number"
+                            min={0}
+                            max={99}
+                            disabled={series.confirmed || isWalkoverSeries}
+                            value={series.leg2.cardsB?.red ?? ''}
+                            onChange={(e) => handleCardChange('leg2', 'b', 'red', e.target.value)}
+                            placeholder="0"
+                            className="h-5 w-6 rounded-sm border border-field-border bg-field text-center font-mono text-[11px] font-bold text-foreground outline-none transition focus:border-red-400 disabled:opacity-80"
+                          />
+                        </div>
+                      </div>
+
+                      {/* A visitante */}
+                      <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-0.5" title={`Amarillas de ${nameA} (Vuelta)`}>
+                          <span className="inline-block h-2.5 w-1.5 rounded-[1px] bg-amber-400" />
+                          <input
+                            type="number"
+                            min={0}
+                            max={99}
+                            disabled={series.confirmed || isWalkoverSeries}
+                            value={series.leg2.cardsA?.yellow ?? ''}
+                            onChange={(e) => handleCardChange('leg2', 'a', 'yellow', e.target.value)}
+                            placeholder="0"
+                            className="h-5 w-6 rounded-sm border border-field-border bg-field text-center font-mono text-[11px] font-bold text-foreground outline-none transition focus:border-amber-400 disabled:opacity-80"
+                          />
+                        </div>
+                        <div className="flex items-center gap-0.5" title={`Rojas de ${nameA} (Vuelta)`}>
+                          <span className="inline-block h-2.5 w-1.5 rounded-[1px] bg-red-500" />
+                          <input
+                            type="number"
+                            min={0}
+                            max={99}
+                            disabled={series.confirmed || isWalkoverSeries}
+                            value={series.leg2.cardsA?.red ?? ''}
+                            onChange={(e) => handleCardChange('leg2', 'a', 'red', e.target.value)}
+                            placeholder="0"
+                            className="h-5 w-6 rounded-sm border border-field-border bg-field text-center font-mono text-[11px] font-bold text-foreground outline-none transition focus:border-red-400 disabled:opacity-80"
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -292,7 +564,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                     : 'Empate global · Ganador por penales:'}
                 </label>
                 <select
-                  disabled={series.confirmed}
+                  disabled={series.confirmed || isWalkoverSeries}
                   value={series.penaltyWinner ?? ''}
                   onChange={(e) =>
                     handlePenaltyChange(
@@ -324,12 +596,16 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
       </div>
 
       {/* Participante B */}
-      {renderSideHeader(nameB, teamB, isByeB, isWinnerB)}
+      {renderSideHeader(nameB, teamB, isByeB, isWinnerB, isWalkoverB)}
 
       {/* Botón de acción: Confirmar o Corregir (RF-23, RF-28) */}
       {ready && (
         <div className="flex items-center justify-end gap-2 border-t border-border bg-secondary/30 px-3 py-2">
-          {!series.confirmed ? (
+          {isWalkoverSeries ? (
+            <span className="text-[11px] font-medium text-destructive/85 italic">
+              Bloqueada por abandono (W.O.)
+            </span>
+          ) : !series.confirmed ? (
             <PrimaryButton
               disabled={!result.canConfirm}
               onClick={handleConfirm}

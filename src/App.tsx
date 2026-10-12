@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Header, type ViewType } from './components/layout/Header';
 import { BracketView } from './components/views/BracketView';
+import { DoubleEliminationView } from './components/views/DoubleEliminationView';
 import { DraftView } from './components/views/DraftView';
+import { GroupStageView } from './components/views/GroupStageView';
 import { LeagueView } from './components/views/LeagueView';
 import { PodiumPanel } from './components/views/PodiumPanel';
 import { RegistrationView } from './components/views/RegistrationView';
@@ -19,6 +21,9 @@ export default function App() {
       if (activeTournament.phase === 'draft') return 'draft';
       if (activeTournament.phase === 'bracket') return 'bracket';
       if (activeTournament.phase === 'league') return 'league';
+      if (activeTournament.phase === 'group_stage') return 'group_stage';
+      if (activeTournament.phase === 'group_playoffs') return 'bracket';
+      if (activeTournament.phase === 'double_elimination') return 'double_elimination';
     }
     return 'registro';
   });
@@ -40,6 +45,8 @@ export default function App() {
           <DraftView
             onProceedToBracket={() => setView('bracket')}
             onProceedToLeague={() => setView('league')}
+            onProceedToGroupStage={() => setView('group_stage')}
+            onProceedToDoubleElimination={() => setView('double_elimination')}
           />
         )}
 
@@ -51,6 +58,14 @@ export default function App() {
 
         {view === 'league' && (
           <LeagueView onTournamentFinished={() => setView('tabla')} />
+        )}
+
+        {view === 'group_stage' && (
+          <GroupStageView onProceedToPlayoffs={() => setView('bracket')} />
+        )}
+
+        {view === 'double_elimination' && (
+          <DoubleEliminationView onTournamentFinished={() => setView('tabla')} />
         )}
 
         {view === 'tabla' && <StandingsView />}

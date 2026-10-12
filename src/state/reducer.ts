@@ -4,12 +4,27 @@ import {
 } from '../domain/players';
 import { addCustomTheme } from '../domain/theme';
 import {
+  computeLeagueTable,
   confirmLeagueMatch,
   computeLeagueTournamentStats,
   isLeagueComplete,
   reopenLeagueMatch,
   setLeagueMatchScore,
 } from '../domain/league';
+import {
+  computeAllGroupStandings,
+  generateGroupPlayoffs,
+  isGroupStageComplete,
+} from '../domain/groupStage';
+import { generatePlayoffsBracketFromStandings } from '../domain/leaguePlayoffs';
+import {
+  advanceDoubleEliminationSeries,
+  computeDoubleEliminationTournamentStats,
+  createGrandFinalResetSeries,
+  generateDoubleEliminationBracketFromOrder,
+  isDoubleEliminationComplete,
+} from '../domain/doubleElimination';
+import { generateBracketFromOrder } from '../domain/bracket';
 import {
   confirmSeries,
   isBracketComplete,
@@ -23,12 +38,107 @@ import {
   removePlayerStats,
   resetStandings,
 } from '../domain/standings';
+import {
+  applyWalkoverToSeries,
+  applyWalkoverToTournament,
+  isMatchLockedByWalkover,
+  resolvePendingWalkoverSeries,
+} from '../domain/walkover';
+import {
+  computeAnnualRanking,
+  updateHeadToHead,
+} from '../domain/awardsAndRankings';
 import type {
   ActiveTournament,
+  GroupMatch,
+  LeagueMatch,
+  PlayerStats,
+  Series,
+  SeriesId,
   TournamentSummary,
+  TournamentType,
 } from '../domain/types';
 import type { AppData } from '../storage/schema';
 import type { Action } from './actions';
+
+/**
+ * Finalizes tournament state atomically, updating stats, history, H2H and Annual Rankings (RF-31, RF-33, RF-76, RF-78).
+ */
+function finalizeTournamentState(
+  state: AppData,
+  updatedStats: Record<string, PlayerStats>,
+  summary: TournamentSummary,
+  tournamentMatches: readonly (LeagueMatch | Series | GroupMatch)[]
+): AppData {
+  // 1. Calculate cards across all matches in this tournament
+  const tournamentCards: Record<string, { yellow: number; red: number }> = {};
+  for (const m of tournamentMatches) {
+    if ('leg1' in m) {
+      if (m.playerA) {
+        tournamentCards[m.playerA] = tournamentCards[m.playerA] ?? { yellow: 0, red: 0 };
+        tournamentCards[m.playerA].yellow += (m.leg1?.cardsA?.yellow ?? 0) + (m.leg2?.cardsA?.yellow ?? 0);
+        tournamentCards[m.playerA].red += (m.leg1?.cardsA?.red ?? 0) + (m.leg2?.cardsA?.red ?? 0);
+      }
+      if (m.playerB) {
+        tournamentCards[m.playerB] = tournamentCards[m.playerB] ?? { yellow: 0, red: 0 };
+        tournamentCards[m.playerB].yellow += (m.leg1?.cardsB?.yellow ?? 0) + (m.leg2?.cardsB?.yellow ?? 0);
+        tournamentCards[m.playerB].red += (m.leg1?.cardsB?.red ?? 0) + (m.leg2?.cardsB?.red ?? 0);
+      }
+    } else {
+      if (m.playerA) {
+        tournamentCards[m.playerA] = tournamentCards[m.playerA] ?? { yellow: 0, red: 0 };
+        tournamentCards[m.playerA].yellow += m.cardsA?.yellow ?? 0;
+        tournamentCards[m.playerA].red += m.cardsA?.red ?? 0;
+      }
+      if (m.playerB) {
+        tournamentCards[m.playerB] = tournamentCards[m.playerB] ?? { yellow: 0, red: 0 };
+        tournamentCards[m.playerB].yellow += m.cardsB?.yellow ?? 0;
+        tournamentCards[m.playerB].red += m.cardsB?.red ?? 0;
+      }
+    }
+  }
+
+  // 2. Consolidate cards and podium count in accumulated stats
+  const finalStats: Record<string, PlayerStats> = { ...updatedStats };
+  const podiumSet = new Set([summary.podium.champion, summary.podium.runnerUp, summary.podium.third]);
+
+  for (const [pId, stat] of Object.entries(finalStats)) {
+    const cards = tournamentCards[pId] ?? { yellow: 0, red: 0 };
+    finalStats[pId] = {
+      ...stat,
+      yellowCards: (state.stats[pId]?.yellowCards ?? 0) + cards.yellow,
+      redCards: (state.stats[pId]?.redCards ?? 0) + cards.red,
+      podiums: (state.stats[pId]?.podiums ?? 0) + (podiumSet.has(pId) ? 1 : 0),
+    };
+  }
+
+  const summaryWithCards: TournamentSummary = {
+    ...summary,
+    cards: tournamentCards,
+  };
+
+  const updatedHistory = [summaryWithCards, ...state.history];
+  const updatedH2H = updateHeadToHead(state.headToHead, tournamentMatches);
+  const finishDate = new Date(summary.finishedAt);
+  const year = isNaN(finishDate.getFullYear())
+    ? parseInt(summary.finishedAt.slice(0, 4), 10) || new Date().getFullYear()
+    : finishDate.getFullYear();
+  const yearKey = String(year);
+
+  const updatedAnnualRankings = {
+    ...(state.annualRankings ?? {}),
+    [yearKey]: computeAnnualRanking(updatedHistory, yearKey),
+  };
+
+  return {
+    ...state,
+    stats: finalStats,
+    history: updatedHistory,
+    headToHead: updatedH2H,
+    annualRankings: updatedAnnualRankings,
+    activeTournament: null, // RF-33: Active tournament cleared atomically
+  };
+}
 
 /**
  * Root state reducer delegating all business logic to pure domain functions (Principle 3, D4).
@@ -57,7 +167,11 @@ export function appReducer(state: AppData, action: Action): AppData {
         state.activeTournament &&
         (state.activeTournament.phase === 'draft' ||
           state.activeTournament.phase === 'bracket' ||
-          state.activeTournament.phase === 'league') &&
+          state.activeTournament.phase === 'league' ||
+          state.activeTournament.phase === 'group_stage' ||
+          state.activeTournament.phase === 'group_playoffs' ||
+          state.activeTournament.phase === 'league_playoffs' ||
+          state.activeTournament.phase === 'double_elimination') &&
         state.activeTournament.participantIds.includes(action.playerId)
       ) {
         console.warn(
@@ -91,21 +205,27 @@ export function appReducer(state: AppData, action: Action): AppData {
     }
 
     case 'STANDINGS_RESET': {
-      // RF-47: Clears all historical accumulated stats and tournament history atomically
+      // RF-47: Clears all historical accumulated stats, H2H records, annual rankings and tournament history atomically
       return {
         ...state,
         stats: resetStandings(),
         history: [],
+        headToHead: {},
+        annualRankings: {},
       };
     }
 
     case 'PARTICIPANTS_SET': {
-      // Guard (RF-45): Cannot change participants while tournament is in draft, bracket or league phase
+      // Guard (RF-45): Cannot change participants while tournament is in active phases
       if (
         state.activeTournament &&
         (state.activeTournament.phase === 'draft' ||
           state.activeTournament.phase === 'bracket' ||
-          state.activeTournament.phase === 'league')
+          state.activeTournament.phase === 'league' ||
+          state.activeTournament.phase === 'group_stage' ||
+          state.activeTournament.phase === 'group_playoffs' ||
+          state.activeTournament.phase === 'league_playoffs' ||
+          state.activeTournament.phase === 'double_elimination')
       ) {
         console.warn(
           '[Reducer] Cannot modify participants while tournament is active in draft, bracket, or league phase.'
@@ -130,6 +250,7 @@ export function appReducer(state: AppData, action: Action): AppData {
         phase: 'theme',
         tournamentType: action.tournamentType ?? 'bracket',
         matchFormat: action.matchFormat ?? 'two_legged',
+        qualifyingSpots: action.qualifyingSpots,
         participantIds: action.participantIds,
         theme: null,
         draftOrder: [],
@@ -137,6 +258,8 @@ export function appReducer(state: AppData, action: Action): AppData {
         byes: [],
         series: [],
         leagueMatches: [],
+        groupMatches: [],
+        walkoverPlayerIds: [],
       };
 
       return {
@@ -239,12 +362,93 @@ export function appReducer(state: AppData, action: Action): AppData {
           phase: 'bracket',
           series: action.series,
           byes: action.byes,
+          bracketOrder: action.bracketOrder,
         },
       };
     }
 
-    case 'LEG_SCORE_SET': {
+    case 'BRACKET_MATCHUPS_MANUALLY_SET': {
       if (!state.activeTournament || state.activeTournament.phase !== 'bracket') {
+        console.warn(
+          '[Reducer] Cannot manually set bracket matchups outside bracket phase.'
+        );
+        return state;
+      }
+
+      const hasStarted = state.activeTournament.series.some(
+        (s) =>
+          s.confirmed ||
+          s.leg1.a !== null ||
+          s.leg1.b !== null ||
+          s.leg2.a !== null ||
+          s.leg2.b !== null
+      );
+      if (hasStarted) {
+        console.warn(
+          '[Reducer] Cannot manually set bracket matchups once matches have started (RF-87).'
+        );
+        return state;
+      }
+
+      try {
+        const generated = generateBracketFromOrder(action.orderedParticipantIds);
+        let series = generated.series;
+        const byes = generated.byes;
+
+        if (
+          state.activeTournament.walkoverPlayerIds &&
+          state.activeTournament.walkoverPlayerIds.length > 0
+        ) {
+          for (const woId of state.activeTournament.walkoverPlayerIds) {
+            series = applyWalkoverToSeries(
+              series,
+              woId,
+              state.activeTournament.matchFormat ?? 'two_legged',
+              state.activeTournament.walkoverPlayerIds
+            );
+          }
+        }
+
+        return {
+          ...state,
+          activeTournament: {
+            ...state.activeTournament,
+            series,
+            byes,
+            bracketOrder: action.orderedParticipantIds,
+          },
+        };
+      } catch (err) {
+        console.warn('[Reducer] Error setting manual bracket matchups:', err);
+        return state;
+      }
+    }
+
+    case 'LEG_SCORE_SET': {
+      const isKnockoutPhase =
+        state.activeTournament &&
+        (state.activeTournament.phase === 'bracket' ||
+          state.activeTournament.phase === 'group_playoffs' ||
+          state.activeTournament.phase === 'league_playoffs' ||
+          state.activeTournament.phase === 'double_elimination');
+
+      if (!state.activeTournament || !isKnockoutPhase) {
+        return state;
+      }
+
+      const targetSeries = state.activeTournament.series.find(
+        (s) => s.id === action.seriesId
+      );
+      if (
+        targetSeries &&
+        isMatchLockedByWalkover(
+          targetSeries,
+          state.activeTournament.walkoverPlayerIds
+        )
+      ) {
+        console.warn(
+          '[Reducer] Cannot edit scores of a series locked by walkover (RF-66).'
+        );
         return state;
       }
 
@@ -255,7 +459,8 @@ export function appReducer(state: AppData, action: Action): AppData {
           action.leg,
           action.side,
           action.value,
-          state.activeTournament.matchFormat ?? 'two_legged'
+          state.activeTournament.matchFormat ?? 'two_legged',
+          action.cards
         );
         return {
           ...state,
@@ -271,7 +476,14 @@ export function appReducer(state: AppData, action: Action): AppData {
     }
 
     case 'PENALTY_WINNER_SET': {
-      if (!state.activeTournament || state.activeTournament.phase !== 'bracket') {
+      const isKnockoutPhase =
+        state.activeTournament &&
+        (state.activeTournament.phase === 'bracket' ||
+          state.activeTournament.phase === 'group_playoffs' ||
+          state.activeTournament.phase === 'league_playoffs' ||
+          state.activeTournament.phase === 'double_elimination');
+
+      if (!state.activeTournament || !isKnockoutPhase) {
         return state;
       }
 
@@ -295,16 +507,42 @@ export function appReducer(state: AppData, action: Action): AppData {
     }
 
     case 'SERIES_CONFIRMED': {
-      if (!state.activeTournament || state.activeTournament.phase !== 'bracket') {
+      const isKnockoutPhase =
+        state.activeTournament &&
+        (state.activeTournament.phase === 'bracket' ||
+          state.activeTournament.phase === 'group_playoffs' ||
+          state.activeTournament.phase === 'league_playoffs' ||
+          state.activeTournament.phase === 'double_elimination');
+
+      if (!state.activeTournament || !isKnockoutPhase) {
         return state;
       }
 
       try {
-        const updatedSeries = confirmSeries(
-          state.activeTournament.series,
-          action.seriesId,
-          state.activeTournament.matchFormat ?? 'two_legged'
-        );
+        let updatedSeries =
+          state.activeTournament.phase === 'double_elimination'
+            ? advanceDoubleEliminationSeries(
+                state.activeTournament.series,
+                action.seriesId,
+                state.activeTournament.matchFormat ?? 'two_legged'
+              )
+            : confirmSeries(
+                state.activeTournament.series,
+                action.seriesId,
+                state.activeTournament.matchFormat ?? 'two_legged'
+              );
+
+        if (
+          state.activeTournament.walkoverPlayerIds &&
+          state.activeTournament.walkoverPlayerIds.length > 0
+        ) {
+          updatedSeries = resolvePendingWalkoverSeries(
+            updatedSeries,
+            state.activeTournament.walkoverPlayerIds,
+            state.activeTournament.matchFormat ?? 'two_legged'
+          );
+        }
+
         return {
           ...state,
           activeTournament: {
@@ -319,7 +557,30 @@ export function appReducer(state: AppData, action: Action): AppData {
     }
 
     case 'SERIES_EDIT_REQUESTED': {
-      if (!state.activeTournament || state.activeTournament.phase !== 'bracket') {
+      const isKnockoutPhase =
+        state.activeTournament &&
+        (state.activeTournament.phase === 'bracket' ||
+          state.activeTournament.phase === 'group_playoffs' ||
+          state.activeTournament.phase === 'league_playoffs' ||
+          state.activeTournament.phase === 'double_elimination');
+
+      if (!state.activeTournament || !isKnockoutPhase) {
+        return state;
+      }
+
+      const target = state.activeTournament.series.find(
+        (s) => s.id === action.seriesId
+      );
+      if (
+        target &&
+        isMatchLockedByWalkover(
+          target,
+          state.activeTournament.walkoverPlayerIds
+        )
+      ) {
+        console.warn(
+          '[Reducer] Cannot reopen a series locked by walkover (RF-66).'
+        );
         return state;
       }
 
@@ -374,12 +635,30 @@ export function appReducer(state: AppData, action: Action): AppData {
         return state;
       }
 
+      const targetMatch = state.activeTournament.leagueMatches.find(
+        (m) => m.id === action.matchId
+      );
+      if (
+        targetMatch &&
+        isMatchLockedByWalkover(
+          targetMatch,
+          state.activeTournament.walkoverPlayerIds
+        )
+      ) {
+        console.warn(
+          '[Reducer] Cannot edit scores of a match locked by walkover (RF-66).'
+        );
+        return state;
+      }
+
       try {
         const updated = setLeagueMatchScore(
           state.activeTournament.leagueMatches,
           action.matchId,
           action.scoreA,
-          action.scoreB
+          action.scoreB,
+          action.cardsA,
+          action.cardsB
         );
         return {
           ...state,
@@ -430,6 +709,22 @@ export function appReducer(state: AppData, action: Action): AppData {
         return state;
       }
 
+      const targetMatch = state.activeTournament.leagueMatches.find(
+        (m) => m.id === action.matchId
+      );
+      if (
+        targetMatch &&
+        isMatchLockedByWalkover(
+          targetMatch,
+          state.activeTournament.walkoverPlayerIds
+        )
+      ) {
+        console.warn(
+          '[Reducer] Cannot reopen a match locked by walkover (RF-66).'
+        );
+        return state;
+      }
+
       try {
         const updated = reopenLeagueMatch(
           state.activeTournament.leagueMatches,
@@ -448,13 +743,510 @@ export function appReducer(state: AppData, action: Action): AppData {
       }
     }
 
+    case 'GROUP_STAGE_GENERATED': {
+      if (!state.activeTournament) {
+        console.warn('[Reducer] No active tournament to generate group stage.');
+        return state;
+      }
+      if (state.activeTournament.phase !== 'draft') {
+        console.warn(
+          '[Reducer] Group stage can only be generated after draft phase.'
+        );
+        return state;
+      }
+      if (
+        state.activeTournament.groupMatches &&
+        state.activeTournament.groupMatches.length > 0
+      ) {
+        console.warn(
+          '[Reducer] Group stage already generated for this tournament.'
+        );
+        return state;
+      }
+
+      return {
+        ...state,
+        activeTournament: {
+          ...state.activeTournament,
+          phase: 'group_stage',
+          groups: action.groups,
+          groupMatches: action.matches,
+        },
+      };
+    }
+
+    case 'GROUP_MATCH_SCORE_SET': {
+      if (
+        !state.activeTournament ||
+        state.activeTournament.phase !== 'group_stage' ||
+        !state.activeTournament.groupMatches
+      ) {
+        return state;
+      }
+
+      const targetMatch = state.activeTournament.groupMatches.find(
+        (m) => m.id === action.matchId
+      );
+      if (
+        targetMatch &&
+        isMatchLockedByWalkover(
+          targetMatch,
+          state.activeTournament.walkoverPlayerIds
+        )
+      ) {
+        console.warn(
+          '[Reducer] Cannot edit scores of a match locked by walkover (RF-66).'
+        );
+        return state;
+      }
+
+      try {
+        const updated = setLeagueMatchScore(
+          state.activeTournament.groupMatches,
+          action.matchId,
+          action.scoreA,
+          action.scoreB,
+          action.cardsA,
+          action.cardsB
+        ) as GroupMatch[];
+
+        return {
+          ...state,
+          activeTournament: {
+            ...state.activeTournament,
+            groupMatches: updated,
+          },
+        };
+      } catch (err) {
+        console.error('[Reducer] Error updating group match score:', err);
+        return state;
+      }
+    }
+
+    case 'GROUP_MATCH_CONFIRMED': {
+      if (
+        !state.activeTournament ||
+        state.activeTournament.phase !== 'group_stage' ||
+        !state.activeTournament.groupMatches
+      ) {
+        return state;
+      }
+
+      try {
+        const updated = confirmLeagueMatch(
+          state.activeTournament.groupMatches,
+          action.matchId
+        ) as GroupMatch[];
+
+        return {
+          ...state,
+          activeTournament: {
+            ...state.activeTournament,
+            groupMatches: updated,
+          },
+        };
+      } catch (err) {
+        console.error('[Reducer] Error confirming group match:', err);
+        return state;
+      }
+    }
+
+    case 'GROUP_MATCH_EDIT_REQUESTED': {
+      if (
+        !state.activeTournament ||
+        state.activeTournament.phase !== 'group_stage' ||
+        !state.activeTournament.groupMatches
+      ) {
+        return state;
+      }
+
+      const targetMatch = state.activeTournament.groupMatches.find(
+        (m) => m.id === action.matchId
+      );
+      if (
+        targetMatch &&
+        isMatchLockedByWalkover(
+          targetMatch,
+          state.activeTournament.walkoverPlayerIds
+        )
+      ) {
+        console.warn(
+          '[Reducer] Cannot reopen a match locked by walkover (RF-66).'
+        );
+        return state;
+      }
+
+      try {
+        const updated = reopenLeagueMatch(
+          state.activeTournament.groupMatches,
+          action.matchId
+        ) as GroupMatch[];
+
+        return {
+          ...state,
+          activeTournament: {
+            ...state.activeTournament,
+            groupMatches: updated,
+          },
+        };
+      } catch (err) {
+        console.error('[Reducer] Error reopening group match:', err);
+        return state;
+      }
+    }
+
+    case 'GROUP_PLAYOFFS_STARTED': {
+      if (!state.activeTournament) {
+        console.warn('[Reducer] No active tournament to start group playoffs.');
+        return state;
+      }
+      if (state.activeTournament.phase !== 'group_stage') {
+        console.warn(
+          '[Reducer] Group playoffs can only start from group_stage phase.'
+        );
+        return state;
+      }
+      const groupMatches = state.activeTournament.groupMatches ?? [];
+      if (!isGroupStageComplete(groupMatches)) {
+        console.warn(
+          '[Reducer] Cannot start group playoffs: all group matches must be confirmed.'
+        );
+        return state;
+      }
+
+      let series = action.series;
+      if (!series || series.length === 0) {
+        const groups = state.activeTournament.groups ?? {};
+        const standings = computeAllGroupStandings(
+          groupMatches,
+          groups,
+          state.activeTournament.teams,
+          state.players
+        );
+        series = generateGroupPlayoffs(standings);
+      }
+
+      // If any participant has abandoned, apply walkover resolution
+      if (
+        state.activeTournament.walkoverPlayerIds &&
+        state.activeTournament.walkoverPlayerIds.length > 0
+      ) {
+        for (const woId of state.activeTournament.walkoverPlayerIds) {
+          series = applyWalkoverToSeries(
+            series,
+            woId,
+            state.activeTournament.matchFormat ?? 'two_legged',
+            state.activeTournament.walkoverPlayerIds
+          );
+        }
+      }
+
+      return {
+        ...state,
+        activeTournament: {
+          ...state.activeTournament,
+          phase: 'group_playoffs',
+          series,
+        },
+      };
+    }
+
+    case 'LEAGUE_PLAYOFFS_STARTED': {
+      if (!state.activeTournament) {
+        console.warn('[Reducer] No active tournament to start league playoffs.');
+        return state;
+      }
+      if (state.activeTournament.phase !== 'league') {
+        console.warn(
+          '[Reducer] League playoffs can only start from league phase.'
+        );
+        return state;
+      }
+      const leagueMatches = state.activeTournament.leagueMatches ?? [];
+      if (!isLeagueComplete(leagueMatches)) {
+        console.warn(
+          '[Reducer] Cannot start league playoffs: all regular league matches must be confirmed.'
+        );
+        return state;
+      }
+
+      let series = action.series;
+      if (!series || series.length === 0) {
+        const standings = computeLeagueTable(
+          leagueMatches,
+          state.activeTournament.participantIds,
+          state.activeTournament.teams,
+          state.players
+        );
+        series = generatePlayoffsBracketFromStandings(
+          standings,
+          state.activeTournament.qualifyingSpots
+        );
+      }
+
+      // If any participant has abandoned, apply walkover resolution
+      if (
+        state.activeTournament.walkoverPlayerIds &&
+        state.activeTournament.walkoverPlayerIds.length > 0
+      ) {
+        for (const woId of state.activeTournament.walkoverPlayerIds) {
+          series = applyWalkoverToSeries(
+            series,
+            woId,
+            state.activeTournament.matchFormat ?? 'two_legged',
+            state.activeTournament.walkoverPlayerIds
+          );
+        }
+      }
+
+      return {
+        ...state,
+        activeTournament: {
+          ...state.activeTournament,
+          phase: 'league_playoffs',
+          series,
+        },
+      };
+    }
+
+    case 'DOUBLE_ELIMINATION_GENERATED': {
+      if (!state.activeTournament) {
+        console.warn(
+          '[Reducer] No active tournament to set double elimination bracket.'
+        );
+        return state;
+      }
+      // Guard (RF-20): Once generated, bracket cannot be regenerated in the active tournament
+      if (state.activeTournament.series.length > 0) {
+        console.warn(
+          '[Reducer] Double elimination bracket already generated for this tournament (RF-20).'
+        );
+        return state;
+      }
+
+      let series = action.bracket?.series ?? action.series ?? [];
+      const byes = action.bracket?.byes ?? action.byes ?? [];
+
+      if (
+        state.activeTournament.walkoverPlayerIds &&
+        state.activeTournament.walkoverPlayerIds.length > 0
+      ) {
+        for (const woId of state.activeTournament.walkoverPlayerIds) {
+          series = applyWalkoverToSeries(
+            series,
+            woId,
+            state.activeTournament.matchFormat ?? 'two_legged',
+            state.activeTournament.walkoverPlayerIds
+          );
+        }
+      }
+
+      return {
+        ...state,
+        activeTournament: {
+          ...state.activeTournament,
+          phase: 'double_elimination',
+          series,
+          byes,
+          bracketOrder: action.bracket?.shuffledOrder,
+        },
+      };
+    }
+
+    case 'DOUBLE_ELIMINATION_MATCH_CONFIRMED': {
+      if (
+        !state.activeTournament ||
+        state.activeTournament.phase !== 'double_elimination'
+      ) {
+        console.warn(
+          '[Reducer] Cannot confirm double elimination match outside double_elimination phase.'
+        );
+        return state;
+      }
+
+      const targetSeries = state.activeTournament.series.find(
+        (s) => s.id === action.seriesId
+      );
+      if (
+        targetSeries &&
+        isMatchLockedByWalkover(
+          targetSeries,
+          state.activeTournament.walkoverPlayerIds
+        )
+      ) {
+        console.warn(
+          '[Reducer] Cannot edit scores of a series locked by walkover (RF-66).'
+        );
+        return state;
+      }
+
+      try {
+        let updatedSeries = advanceDoubleEliminationSeries(
+          state.activeTournament.series,
+          action.seriesId as SeriesId,
+          state.activeTournament.matchFormat ?? 'two_legged'
+        );
+
+        if (
+          state.activeTournament.walkoverPlayerIds &&
+          state.activeTournament.walkoverPlayerIds.length > 0
+        ) {
+          updatedSeries = resolvePendingWalkoverSeries(
+            updatedSeries,
+            state.activeTournament.walkoverPlayerIds,
+            state.activeTournament.matchFormat ?? 'two_legged'
+          );
+        }
+
+        return {
+          ...state,
+          activeTournament: {
+            ...state.activeTournament,
+            series: updatedSeries,
+          },
+        };
+      } catch (err) {
+        console.error(
+          '[Reducer] Error confirming double elimination series:',
+          err
+        );
+        return state;
+      }
+    }
+
+    case 'DOUBLE_ELIMINATION_RESET_TRIGGERED': {
+      if (
+        !state.activeTournament ||
+        state.activeTournament.phase !== 'double_elimination'
+      ) {
+        console.warn(
+          '[Reducer] Cannot trigger grand final reset outside double_elimination phase.'
+        );
+        return state;
+      }
+
+      const gf1 = state.activeTournament.series.find((s) => s.id === 'GF1');
+      if (
+        !gf1 ||
+        !gf1.confirmed ||
+        !gf1.winner ||
+        !gf1.playerA ||
+        !gf1.playerB
+      ) {
+        console.warn('[Reducer] Cannot trigger reset: GF1 is not confirmed.');
+        return state;
+      }
+
+      const wbChampion = gf1.playerA;
+      const lbChampion = gf1.playerB;
+
+      // Reset is only triggered if LB champion won GF1
+      if (gf1.winner !== lbChampion) {
+        console.warn('[Reducer] Reset not required: WB champion won GF1.');
+        return state;
+      }
+
+      const existingGf2 = state.activeTournament.series.find(
+        (s) => s.id === 'GF2'
+      );
+      let updatedSeries = state.activeTournament.series;
+
+      if (existingGf2) {
+        updatedSeries = updatedSeries.map((s) =>
+          s.id === 'GF2'
+            ? { ...s, playerA: wbChampion, playerB: lbChampion }
+            : s
+        );
+      } else {
+        const newGf2 = createGrandFinalResetSeries(wbChampion, lbChampion);
+        updatedSeries = [...updatedSeries, newGf2];
+      }
+
+      return {
+        ...state,
+        activeTournament: {
+          ...state.activeTournament,
+          series: updatedSeries,
+        },
+      };
+    }
+
+    case 'DOUBLE_ELIMINATION_MATCHUPS_MANUALLY_SET': {
+      if (
+        !state.activeTournament ||
+        state.activeTournament.phase !== 'double_elimination'
+      ) {
+        console.warn(
+          '[Reducer] Cannot manually set double elimination matchups outside double_elimination phase.'
+        );
+        return state;
+      }
+
+      const hasStarted = state.activeTournament.series.some(
+        (s) =>
+          s.confirmed ||
+          s.leg1.a !== null ||
+          s.leg1.b !== null ||
+          s.leg2.a !== null ||
+          s.leg2.b !== null
+      );
+      if (hasStarted) {
+        console.warn(
+          '[Reducer] Cannot manually set double elimination matchups once matches have started (RF-87).'
+        );
+        return state;
+      }
+
+      try {
+        const bracket = generateDoubleEliminationBracketFromOrder(
+          action.orderedParticipantIds
+        );
+        let series = bracket.series;
+        const byes = bracket.byes;
+
+        if (
+          state.activeTournament.walkoverPlayerIds &&
+          state.activeTournament.walkoverPlayerIds.length > 0
+        ) {
+          for (const woId of state.activeTournament.walkoverPlayerIds) {
+            series = applyWalkoverToSeries(
+              series,
+              woId,
+              state.activeTournament.matchFormat ?? 'two_legged',
+              state.activeTournament.walkoverPlayerIds
+            );
+          }
+        }
+
+        return {
+          ...state,
+          activeTournament: {
+            ...state.activeTournament,
+            series,
+            byes,
+            bracketOrder: action.orderedParticipantIds,
+          },
+        };
+      } catch (err) {
+        console.warn(
+          '[Reducer] Error setting manual double elimination matchups:',
+          err
+        );
+        return state;
+      }
+    }
+
     case 'TOURNAMENT_FINISHED': {
       if (!state.activeTournament) {
         console.warn('[Reducer] Cannot finish tournament: no active tournament.');
         return state;
       }
 
-      if (state.activeTournament.phase === 'bracket') {
+      if (
+        state.activeTournament.phase === 'bracket' ||
+        state.activeTournament.phase === 'group_playoffs' ||
+        state.activeTournament.phase === 'league_playoffs'
+      ) {
         if (!isBracketComplete(state.activeTournament.series)) {
           console.warn('[Reducer] Cannot finish tournament: Final and Third place must be confirmed.');
           return state;
@@ -466,11 +1258,18 @@ export function appReducer(state: AppData, action: Action): AppData {
           );
           const updatedStats = applyStats(state.stats, deltas);
 
+          const defaultType: TournamentType =
+            state.activeTournament.phase === 'group_playoffs'
+              ? 'group_stage'
+              : state.activeTournament.phase === 'league_playoffs'
+                ? 'league_playoffs'
+                : 'bracket';
+
           const summary: TournamentSummary = {
             id: action.summaryId,
             finishedAt: action.now,
             theme: state.activeTournament.theme ?? 'Sin temática',
-            tournamentType: 'bracket',
+            tournamentType: state.activeTournament.tournamentType ?? defaultType,
             matchFormat: state.activeTournament.matchFormat ?? 'two_legged',
             participants: state.activeTournament.participantIds.map((id) => ({
               playerId: id,
@@ -479,14 +1278,69 @@ export function appReducer(state: AppData, action: Action): AppData {
             podium,
           };
 
-          return {
-            ...state,
-            stats: updatedStats,
-            history: [summary, ...state.history],
-            activeTournament: null, // RF-33: Active tournament cleared atomically
-          };
+          const tournamentMatches = [
+            ...(state.activeTournament.leagueMatches ?? []),
+            ...(state.activeTournament.groupMatches ?? []),
+            ...(state.activeTournament.series ?? []),
+          ];
+
+          return finalizeTournamentState(
+            state,
+            updatedStats,
+            summary,
+            tournamentMatches
+          );
         } catch (err) {
-          console.error('[Reducer] Error finalizing bracket tournament:', err);
+          console.error('[Reducer] Error finalizing tournament with playoffs:', err);
+          return state;
+        }
+      }
+
+      if (state.activeTournament.phase === 'double_elimination') {
+        const matchFormat = state.activeTournament.matchFormat ?? 'two_legged';
+        if (
+          !isDoubleEliminationComplete(
+            state.activeTournament.series,
+            matchFormat
+          )
+        ) {
+          console.warn(
+            '[Reducer] Cannot finish tournament: Double elimination tournament is not complete.'
+          );
+          return state;
+        }
+
+        try {
+          const { stats: deltas, podium } =
+            computeDoubleEliminationTournamentStats(state.activeTournament);
+          const updatedStats = applyStats(state.stats, deltas);
+
+          const summary: TournamentSummary = {
+            id: action.summaryId,
+            finishedAt: action.now,
+            theme: state.activeTournament.theme ?? 'Sin temática',
+            tournamentType: 'double_elimination',
+            matchFormat,
+            participants: state.activeTournament.participantIds.map((id) => ({
+              playerId: id,
+              team: state.activeTournament?.teams[id] ?? '',
+            })),
+            podium,
+          };
+
+          const tournamentMatches = [...(state.activeTournament.series ?? [])];
+
+          return finalizeTournamentState(
+            state,
+            updatedStats,
+            summary,
+            tournamentMatches
+          );
+        } catch (err) {
+          console.error(
+            '[Reducer] Error finalizing double elimination tournament:',
+            err
+          );
           return state;
         }
       }
@@ -519,19 +1373,21 @@ export function appReducer(state: AppData, action: Action): AppData {
             podium,
           };
 
-          return {
-            ...state,
-            stats: updatedStats,
-            history: [summary, ...state.history],
-            activeTournament: null, // RF-33 / RF-55
-          };
+          const tournamentMatches = [...(state.activeTournament.leagueMatches ?? [])];
+
+          return finalizeTournamentState(
+            state,
+            updatedStats,
+            summary,
+            tournamentMatches
+          );
         } catch (err) {
           console.error('[Reducer] Error finalizing league tournament:', err);
           return state;
         }
       }
 
-      console.warn('[Reducer] Cannot finish tournament: tournament is neither in bracket nor league phase.');
+      console.warn('[Reducer] Cannot finish tournament: tournament is not in a finalizable phase.');
       return state;
     }
 
@@ -541,6 +1397,27 @@ export function appReducer(state: AppData, action: Action): AppData {
         ...state,
         activeTournament: null,
       };
+    }
+
+    case 'PLAYER_WALKOVER_DECLARED': {
+      if (!state.activeTournament) {
+        console.warn('[Reducer] Cannot declare walkover: no active tournament.');
+        return state;
+      }
+
+      try {
+        const updatedTournament = applyWalkoverToTournament(
+          state.activeTournament,
+          action.playerId
+        );
+        return {
+          ...state,
+          activeTournament: updatedTournament,
+        };
+      } catch (err) {
+        console.warn('[Reducer] Error declaring walkover:', err);
+        return state;
+      }
     }
 
     case 'CUSTOM_THEME_ADDED': {

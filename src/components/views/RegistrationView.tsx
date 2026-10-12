@@ -8,6 +8,10 @@ import {
   Trash2,
   Trophy,
   ListOrdered,
+  Layers,
+  LayoutGrid,
+  GitFork,
+  Dices,
 } from 'lucide-react';
 import {
   formatPlayerName,
@@ -54,15 +58,44 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
     return players.slice(0, 10).map((p) => p.id);
   });
 
-  // Guard (RF-45): If tournament is already in Draft, Bracket or League, locked against changing participants
+  const count = selectedIds.length;
+
+  // Qualifying spots for league_playoffs (RF-68, RF-86)
+  const [qualifyingSpots, setQualifyingSpots] = useState<number>(() => {
+    return (
+      activeTournament?.qualifyingSpots ??
+      (count <= 5 ? 2 : count <= 9 ? 4 : 8)
+    );
+  });
+
+  // Guard (RF-45): If tournament is already in an active competitive phase, locked against changing participants
   const isLocked =
     activeTournament !== null &&
     (activeTournament.phase === 'draft' ||
       activeTournament.phase === 'bracket' ||
-      activeTournament.phase === 'league');
+      activeTournament.phase === 'league' ||
+      activeTournament.phase === 'group_stage' ||
+      activeTournament.phase === 'group_playoffs' ||
+      activeTournament.phase === 'league_playoffs' ||
+      activeTournament.phase === 'double_elimination');
 
-  const count = selectedIds.length;
-  const isValidCount = count >= 4 && count <= 10;
+  const isValidCount =
+    tournamentType === 'group_stage'
+      ? count === 6 || count === 9
+      : count >= 4 && count <= 10;
+
+  const handleRandomizeFormat = () => {
+    if (isLocked) return;
+    const validFormats: TournamentType[] =
+      count === 6 || count === 9
+        ? ['bracket', 'league', 'group_stage', 'league_playoffs', 'double_elimination']
+        : ['bracket', 'league', 'league_playoffs', 'double_elimination'];
+
+    const pool = validFormats.filter((f) => f !== tournamentType);
+    const options = pool.length > 0 ? pool : validFormats;
+    const picked = options[Math.floor(Math.random() * options.length)]!;
+    setTournamentType(picked);
+  };
 
   const handleAddPlayer = (e: FormEvent) => {
     e.preventDefault();
@@ -105,9 +138,7 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
   const handleDeletePlayer = (playerId: PlayerId, fullName: string) => {
     if (
       activeTournament &&
-      (activeTournament.phase === 'draft' ||
-        activeTournament.phase === 'bracket' ||
-        activeTournament.phase === 'league') &&
+      isLocked &&
       activeTournament.participantIds.includes(playerId)
     ) {
       alert('No podés eliminar a un jugador que está participando en un torneo en curso.');
@@ -150,6 +181,10 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
       participantIds: selectedIds,
       tournamentType,
       matchFormat,
+      qualifyingSpots:
+        tournamentType === 'league_playoffs'
+          ? Math.min(Math.max(qualifyingSpots, 2), count)
+          : undefined,
       tournamentId,
       now,
     });
@@ -163,7 +198,7 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
         <div className="flex items-center gap-3 rounded-sm border border-accent/60 bg-secondary/80 p-4 text-sm text-foreground">
           <AlertCircle className="h-5 w-5 shrink-0 text-accent" />
           <p>
-            Hay un torneo en curso. No podés cambiar los participantes ni las modalidades mientras el torneo esté en fase de Draft, Llaves o Liga.
+            Hay un torneo en curso. No podés cambiar los participantes ni las modalidades mientras el torneo esté en fase activa (Draft, Llaves, Liga o Grupos).
           </p>
         </div>
       )}
@@ -231,9 +266,21 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
         <div className="space-y-5">
           {/* Selector Modalidad de Torneo (RF-48) */}
           <div>
-            <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              Modalidad de Torneo (RF-48)
-            </label>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                Modalidad de Torneo (RF-48)
+              </label>
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={handleRandomizeFormat}
+                className="inline-flex items-center gap-1.5 rounded-sm border border-accent/40 bg-accent/10 px-2.5 py-1 text-xs font-bold uppercase tracking-wider text-accent transition hover:border-accent hover:bg-accent/20 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                title="Sortear formato al azar"
+              >
+                <Dices className="h-3.5 w-3.5 text-accent" />
+                Sortear Formato
+              </button>
+            </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <button
                 type="button"
@@ -288,13 +335,136 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
                   Fixture Round Robin completo. Todos juegan contra todos con tabla de posiciones interna en vivo.
                 </p>
               </button>
+
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={() => setTournamentType('group_stage')}
+                className={`flex flex-col items-start gap-1.5 rounded-sm border p-3.5 text-left transition ${
+                  tournamentType === 'group_stage'
+                    ? 'border-primary/80 bg-primary/10 shadow-[0_0_12px_rgba(74,222,128,0.15)] ring-1 ring-primary'
+                    : 'border-border bg-background/50 hover:border-accent hover:bg-background/80'
+                } ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+              >
+                <div className="flex items-center gap-2">
+                  <Layers
+                    className={`h-4 w-4 ${
+                      tournamentType === 'group_stage'
+                        ? 'text-primary'
+                        : 'text-muted-foreground'
+                    }`}
+                  />
+                  <span className="font-display text-sm font-bold tracking-wider text-foreground">
+                    Fase de Grupos + Playoffs
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Grupos de 3 jugadores (6 o 9 participantes obligatorios) y definición final en llaves de Semifinales.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={() => setTournamentType('league_playoffs')}
+                className={`flex flex-col items-start gap-1.5 rounded-sm border p-3.5 text-left transition ${
+                  tournamentType === 'league_playoffs'
+                    ? 'border-primary/80 bg-primary/10 shadow-[0_0_12px_rgba(74,222,128,0.15)] ring-1 ring-primary'
+                    : 'border-border bg-background/50 hover:border-accent hover:bg-background/80'
+                } ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+              >
+                <div className="flex items-center gap-2">
+                  <LayoutGrid
+                    className={`h-4 w-4 ${
+                      tournamentType === 'league_playoffs'
+                        ? 'text-primary'
+                        : 'text-muted-foreground'
+                    }`}
+                  />
+                  <span className="font-display text-sm font-bold tracking-wider text-foreground">
+                    Liga + Reducido
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Fase regular Round Robin con corte dinámico de clasificados y Playoffs eliminatorios al título.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                disabled={isLocked}
+                onClick={() => setTournamentType('double_elimination')}
+                className={`flex flex-col items-start gap-1.5 rounded-sm border p-3.5 text-left transition ${
+                  tournamentType === 'double_elimination'
+                    ? 'border-primary/80 bg-primary/10 shadow-[0_0_12px_rgba(74,222,128,0.15)] ring-1 ring-primary'
+                    : 'border-border bg-background/50 hover:border-accent hover:bg-background/80'
+                } ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+              >
+                <div className="flex items-center gap-2">
+                  <GitFork
+                    className={`h-4 w-4 ${
+                      tournamentType === 'double_elimination'
+                        ? 'text-primary'
+                        : 'text-muted-foreground'
+                    }`}
+                  />
+                  <span className="font-display text-sm font-bold tracking-wider text-foreground">
+                    Doble Eliminación (Winner & Loser)
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Winner y Loser brackets con Byes asimétricos y Grand Final Reset si el finalista de perdedores gana la serie 1.
+                </p>
+              </button>
             </div>
+
+            {tournamentType === 'league_playoffs' && (
+              <div className="mt-3 rounded-sm border border-primary/40 bg-primary/10 p-3.5 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <label
+                      htmlFor="qualifying-spots-input"
+                      className="text-xs font-bold uppercase tracking-wider text-primary flex items-center gap-1.5"
+                    >
+                      <LayoutGrid className="h-4 w-4" />
+                      Clasificados al Reducido (Bracket Final)
+                    </label>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Definí cuántos jugadores avanzan a las llaves eliminatorias por el título (mínimo 2, máximo {count}).
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      id="qualifying-spots-select"
+                      disabled={isLocked}
+                      value={Math.min(Math.max(qualifyingSpots, 2), Math.max(2, count))}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        if (!isNaN(val)) {
+                          setQualifyingSpots(val);
+                        }
+                      }}
+                      className="rounded-sm border border-border bg-background px-3 py-2 text-sm font-mono font-bold text-foreground transition focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary shadow-inner"
+                    >
+                      {Array.from(
+                        { length: Math.max(0, count - 1) },
+                        (_, i) => i + 2
+                      ).map((num) => (
+                        <option key={num} value={num}>
+                          {num} clasificados
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Selector Modalidad de Partido (RF-49, RF-59: Visible para Llaves y Liga) */}
+          {/* Selector Modalidad de Partido (RF-49, RF-59) */}
           <div className="border-t border-border/50 pt-4">
             <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              Modalidad de Partido ({tournamentType === 'league' ? 'Liga' : 'Llaves'})
+              Modalidad de Partido ({tournamentType === 'bracket' || tournamentType === 'double_elimination' ? 'Llaves' : tournamentType === 'group_stage' ? 'Fase de Grupos' : 'Liga'})
             </label>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <button
@@ -308,14 +478,14 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
                 } ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
               >
                 <span className="font-display text-sm font-bold tracking-wider text-foreground">
-                  {tournamentType === 'league'
-                    ? 'Ida y Vuelta (Doble Rueda)'
-                    : 'Ida y Vuelta (Clásico)'}
+                  {tournamentType === 'bracket'
+                    ? 'Ida y Vuelta (Clásico)'
+                    : 'Ida y Vuelta (Doble Rueda)'}
                 </span>
                 <p className="text-xs text-muted-foreground">
-                  {tournamentType === 'league'
-                    ? 'Doble Round Robin. Se juegan partidos de ida y vuelta invirtiendo localías.'
-                    : 'Dos partidos por serie. Global con definición por penales si hay igualdad.'}
+                  {tournamentType === 'bracket'
+                    ? 'Dos partidos por serie. Global con definición por penales si hay igualdad.'
+                    : 'Se juegan partidos de ida y vuelta invirtiendo las localías.'}
                 </p>
               </button>
 
@@ -330,14 +500,14 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
                 } ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
               >
                 <span className="font-display text-sm font-bold tracking-wider text-foreground">
-                  {tournamentType === 'league'
-                    ? 'Partido Único (Una Rueda)'
-                    : 'Partido Único (Rápido)'}
+                  {tournamentType === 'bracket'
+                    ? 'Partido Único (Rápido)'
+                    : 'Partido Único (Una Rueda)'}
                 </span>
                 <p className="text-xs text-muted-foreground">
-                  {tournamentType === 'league'
-                    ? 'Round Robin simple. Todos juegan una vez contra cada rival.'
-                    : 'Un solo partido por serie a 90 min con penales directos en caso de empate.'}
+                  {tournamentType === 'bracket'
+                    ? 'Un solo partido por serie a 90 min con penales directos en caso de empate.'
+                    : 'Rueda simple. Todos juegan una vez contra cada rival.'}
                 </p>
               </button>
             </div>
@@ -426,20 +596,34 @@ export function RegistrationView({ onProceedToTheme }: RegistrationViewProps) {
         {/* 3. Indicador de faltantes / sobrantes y botón de continuar */}
         <div className="mt-8 flex flex-col items-center justify-between gap-4 border-t border-border pt-4 sm:flex-row">
           <div>
-            {count < 4 && (
-              <p className="text-xs font-semibold uppercase tracking-wider text-destructive">
-                Faltan {4 - count} participante{4 - count === 1 ? '' : 's'} para alcanzar el mínimo de 4.
-              </p>
-            )}
-            {count > 10 && (
-              <p className="text-xs font-semibold uppercase tracking-wider text-destructive">
-                Sobran {count - 10} participante{count - 10 === 1 ? '' : 's'}. El máximo permitido son 10.
-              </p>
-            )}
-            {isValidCount && (
-              <p className="text-xs font-semibold uppercase tracking-wider text-primary">
-                ¡Cantidad justa! {count} jugadores listos para competir.
-              </p>
+            {tournamentType === 'group_stage' ? (
+              isValidCount ? (
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary">
+                  ¡Cantidad exacta! {count} jugadores divididos en {count / 3} grupos de 3.
+                </p>
+              ) : (
+                <p className="text-xs font-semibold uppercase tracking-wider text-destructive">
+                  La Fase de Grupos requiere exactamente 6 o 9 participantes (actualmente: {count}).
+                </p>
+              )
+            ) : (
+              <>
+                {count < 4 && (
+                  <p className="text-xs font-semibold uppercase tracking-wider text-destructive">
+                    Faltan {4 - count} participante{4 - count === 1 ? '' : 's'} para alcanzar el mínimo de 4.
+                  </p>
+                )}
+                {count > 10 && (
+                  <p className="text-xs font-semibold uppercase tracking-wider text-destructive">
+                    Sobran {count - 10} participante{count - 10 === 1 ? '' : 's'}. El máximo permitido son 10.
+                  </p>
+                )}
+                {isValidCount && (
+                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">
+                    ¡Cantidad justa! {count} jugadores listos para competir.
+                  </p>
+                )}
+              </>
             )}
           </div>
 

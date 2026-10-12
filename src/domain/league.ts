@@ -1,7 +1,9 @@
+import { sortStandingsWithFairPlay } from './fairPlay';
 import { formatPlayerName } from './players';
 import { shuffle } from './random';
 import { isValidGoal } from './series';
 import type {
+  CardCounts,
   LeagueMatch,
   LeagueStandingRow,
   MatchFormat,
@@ -135,7 +137,9 @@ export function setLeagueMatchScore(
   matches: readonly LeagueMatch[],
   matchId: string,
   scoreA: number | null,
-  scoreB: number | null
+  scoreB: number | null,
+  cardsA?: CardCounts,
+  cardsB?: CardCounts
 ): LeagueMatch[] {
   if (scoreA !== null && !isValidGoal(scoreA)) {
     throw new Error(
@@ -148,9 +152,17 @@ export function setLeagueMatchScore(
     );
   }
 
-  return matches.map((m) =>
-    m.id === matchId ? { ...m, scoreA, scoreB } : m
-  );
+  return matches.map((m) => {
+    if (m.id !== matchId) return m;
+    const updated: LeagueMatch = { ...m, scoreA, scoreB };
+    if (cardsA !== undefined) {
+      updated.cardsA = cardsA;
+    }
+    if (cardsB !== undefined) {
+      updated.cardsB = cardsB;
+    }
+    return updated;
+  });
 }
 
 /**
@@ -217,6 +229,8 @@ export function computeLeagueTable(
       pp: number;
       gf: number;
       gc: number;
+      yellowCards: number;
+      redCards: number;
     }
   > = {};
 
@@ -230,6 +244,8 @@ export function computeLeagueTable(
       pp: 0,
       gf: 0,
       gc: 0,
+      yellowCards: 0,
+      redCards: 0,
     };
   }
 
@@ -244,6 +260,8 @@ export function computeLeagueTable(
       records[playerA].pj += 1;
       records[playerA].gf += scoreA;
       records[playerA].gc += scoreB;
+      records[playerA].yellowCards += m.cardsA?.yellow ?? 0;
+      records[playerA].redCards += m.cardsA?.red ?? 0;
 
       if (scoreA > scoreB) {
         records[playerA].pg += 1;
@@ -260,6 +278,8 @@ export function computeLeagueTable(
       records[playerB].pj += 1;
       records[playerB].gf += scoreB;
       records[playerB].gc += scoreA;
+      records[playerB].yellowCards += m.cardsB?.yellow ?? 0;
+      records[playerB].redCards += m.cardsB?.red ?? 0;
 
       if (scoreB > scoreA) {
         records[playerB].pg += 1;
@@ -273,14 +293,18 @@ export function computeLeagueTable(
     }
   }
 
-  const rows = participantIds.map((id) => {
+  const hasCardData = matches.some(
+    (m) => m.cardsA !== undefined || m.cardsB !== undefined
+  );
+
+  const rows: LeagueStandingRow[] = participantIds.map((id) => {
     const stat = records[id]!;
     const playerObj = playersMap.get(id);
     const displayName = playerObj ? formatPlayerName(playerObj) : id;
     const team = teams?.[id] ?? '';
     const dg = stat.gf - stat.gc;
 
-    return {
+    const row: LeagueStandingRow = {
       playerId: id,
       displayName,
       team,
@@ -292,22 +316,18 @@ export function computeLeagueTable(
       gf: stat.gf,
       gc: stat.gc,
       dg,
-      rank: 1, // Will be set after sorting
+      rank: 1, // Will be set by sortStandingsWithFairPlay
     };
+
+    if (hasCardData) {
+      row.yellowCards = stat.yellowCards;
+      row.redCards = stat.redCards;
+    }
+
+    return row;
   });
 
-  // Sort: PTS desc -> DG desc -> GF desc -> displayName asc
-  rows.sort((a, b) => {
-    if (b.pts !== a.pts) return b.pts - a.pts;
-    if (b.dg !== a.dg) return b.dg - a.dg;
-    if (b.gf !== a.gf) return b.gf - a.gf;
-    return a.displayName.localeCompare(b.displayName, 'es');
-  });
-
-  return rows.map((r, idx) => ({
-    ...r,
-    rank: idx + 1,
-  }));
+  return sortStandingsWithFairPlay(rows, matches);
 }
 
 /**

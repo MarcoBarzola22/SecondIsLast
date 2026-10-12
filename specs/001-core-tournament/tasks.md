@@ -102,4 +102,97 @@
 - [x] **T36 · UI: Ampliación de Registro y Columna de Octavos en BracketView** — En `RegistrationView.tsx`, permitir seleccionar hasta 10 jugadores con contador `${count}/10` y mensajes acordes. En `BracketView.tsx`, renderizar condicionalmente la columna "Octavos de Final" (Play-in) cuando el torneo tenga series de ronda `round_of_16` (9 y 10 participantes) con ancho adecuado para scroll horizontal.
   - Cubre: RF-6, RF-60.
 
+## Fase J — Fair Play y Criterios de Desempate (Tarjetas y H2H)
+
+- [x] **T37 · Dominio y Tests: Tarjetas y nuevo orden de desempate en tablas (H2H, Fair Play)** — Soporte de `CardCounts` (`yellow`, `red`) en `LegScore` y `LeagueMatch`. Función pura `sortStandingsWithFairPlay` implementando: 1) PTS, 2) DG, 3) Duelo Directo (H2H entre los empatados), 4) PG, 5) Menos TR, 6) Menos TA, 7) Apellido alfabético. Tests exhaustivos en `src/domain/__tests__/fairPlay.test.ts`.
+  - Cubre: RF-61, RF-62 · Principio 3 · D20.
+- [x] **T38 · Estado y Reducer: Soporte de tarjetas en partidos/series** — Actualización de acciones `LEG_SCORE_SET`, `LEAGUE_MATCH_SCORE_SET` para aceptar `cards?: CardCounts`. Integración en `reducer.ts` asegurando persistencia de tarjetas y recálculo automático de la tabla con `sortStandingsWithFairPlay`. Tests en `reducer.test.ts`.
+  - Cubre: RF-61, RF-62 · Principio 3 · D20.
+- [x] **T39 · UI: Inputs de tarjetas y visualización en tablas** — Inputs numéricos para TA y TR (0-99) en `SeriesCard.tsx` y `LeagueMatchCard.tsx`. Renderizado de columnas/chips para TR y TA en `LeagueTable.tsx` y detalle en tablas.
+  - Cubre: RF-61, RF-63.
+
+## Fase K — Abandono de Torneo por Jugador (Walkover)
+
+- [x] **T40 · Dominio y Tests: Lógica de Walkover (3-0 en contra en todos los partidos)** — Módulo puro `src/domain/walkover.ts` con función `applyWalkoverToTournament(tournament, playerId)`. Sobreescribe todos los partidos disputados y por disputar con resultado 0-3 en contra (rival 3 goles a favor, desertor 0 goles). En series de llaves, el rival avanza automáticamente. Recálculo automático de la tabla. Tests en `walkover.test.ts`.
+  - Cubre: RF-64, RF-65, RF-66 · Principio 3 · D21.
+- [x] **T41 · Estado y Reducer: Acción de abandono individual y recálculo** — Acción `PLAYER_WALKOVER_DECLARED` en `actions.ts`. En `reducer.ts`, delegación en `applyWalkoverToTournament` e incorporación de `playerId` a `walkoverPlayerIds: PlayerId[]`. Tests en `reducer.test.ts`.
+  - Cubre: RF-64, RF-65, RF-66 · Principio 3, 5 · D21.
+- [x] **T42 · UI: Botón "Abandonar Torneo" por jugador y feedback visual de W.O.** — Botón individual en filas de jugadores en `LeagueView` y `BracketView` con diálogo de confirmación estricta (`window.confirm`). Badges visuales "W.O." para los partidos afectados y bloqueo de edición en partidos con walkover.
+  - Cubre: RF-64, RF-65, RF-66.
+
+## Fase L — Nuevos Formatos: Fase de Grupos y Liga + Reducido
+
+- [x] **T43 · Dominio y Tests: Fase de Grupos (6 y 9 participantes, Berger por grupo, desempates y playoffs)** — Módulo puro `src/domain/groupStage.ts` con `generateGroupsFixture`, `computeGroupStandings`, `getBestRunnerUp`, `generateGroupPlayoffs`. Tests exhaustivos en `groupStage.test.ts` para 6 participantes (2 grupos de 3 con clasificación 1° y 2° a Semis) y 9 participantes (3 grupos de 3 con clasificación de tres 1° y el mejor 2° comparativo por Fair Play). Soporte para partido único e ida/vuelta.
+  - Cubre: RF-6, RF-48, RF-49, RF-67 · Principio 3 · D22.
+- [x] **T44 · Dominio y Tests: Liga + Reducido (corte de clasificados según N y generación del bracket final)** — Módulo puro `src/domain/leaguePlayoffs.ts` con `generatePlayoffsBracketFromStandings`. Detección de conclusión de fase regular y corte de clasificados: 4 participantes (top 2 a Final), 6 u 8 participantes (top 4 a Semis), 10 participantes (top 8 a Cuartos). Tests en `leaguePlayoffs.test.ts`.
+  - Cubre: RF-48, RF-68 · Principio 3 · D23.
+- [x] **T45 · Estado y Reducer: Soporte de fases group_stage, group_playoffs y league_playoffs** — Nuevas acciones `GROUP_STAGE_GENERATED`, `GROUP_MATCH_SCORE_SET`, `GROUP_MATCH_CONFIRMED`, `GROUP_PLAYOFFS_STARTED`, `LEAGUE_PLAYOFFS_STARTED` en `actions.ts` y manejo en `reducer.ts`. Tests en `reducer.test.ts`.
+  - Cubre: RF-48, RF-67, RF-68 · Principio 3 · D22, D23.
+- [x] **T46 · UI: Selector de nuevos formatos en Registro y vista GroupStageView** — Opciones "Fase de Grupos + Playoffs" y "Liga + Reducido" en `RegistrationView.tsx`. Creación de `GroupStageView.tsx` mostrando los grupos paralelos (Grupo A, B, C) con sus fechas, tablas y botón de avance a playoffs.
+  - Cubre: RF-6, RF-48, RF-67.
+- [x] **T47 · UI: Transición de fase en Liga + Reducido y Bracket de Playoffs** — En `LeagueView`, al completar la fase regular, renderizado del botón "Comenzar Reducido" y visualización del cuadro de playoffs con avance de llaves y podio final.
+  - Cubre: RF-68, RF-30, RF-31.
+
+## Fase M — Nuevo Formato: Doble Eliminación (Winner/Loser Bracket)
+
+- [x] **T48 · Dominio y Tests: Generación y progresión de Doble Eliminación** — Módulo puro `src/domain/doubleElimination.ts` con `generateDoubleEliminationBracket`, `advanceDoubleEliminationSeries`, `evaluateGrandFinal`. Soporte para 4 a 10 participantes con Byes asimétricos, caída de perdedores de WB a LB y evaluación de Grand Final Reset si el finalista de LB vence al de WB en la serie 1. Tests en `doubleElimination.test.ts`.
+  - Cubre: RF-48, RF-69 · Principio 3 · D24.
+- [x] **T49 · Estado y Reducer: Soporte de Doble Eliminación en activeTournament y reducer** — Acciones `DOUBLE_ELIMINATION_GENERATED`, `DOUBLE_ELIMINATION_MATCH_CONFIRMED`, `DOUBLE_ELIMINATION_RESET_TRIGGERED`. Integración en `reducer.ts` y persistencia. Tests en `reducer.test.ts`.
+  - Cubre: RF-48, RF-69 · Principio 3 · D24.
+- [x] **T50 · UI: Componente y vista DoubleEliminationView** — Creación de `DoubleEliminationView.tsx` renderizando columnas para Winner Bracket, Loser Bracket y la Gran Final con indicador de "Bracket Reset" en caso de empate global o victoria del LB. Integración en `App.tsx` y `Header.tsx`.
+  - Cubre: RF-48, RF-69.
+
+## Fase N — Calculadora de Escenarios (Smart UI)
+
+- [x] **T51 · Dominio y Tests: Algoritmo de clasificación matemática y cálculo de escenarios** — Módulo puro `src/domain/scenarios.ts` con `calculateMathematicalQualification(standings, remainingMatches, qualifyingSpots)` y `getMatchScenarioGuidance(match, standings, remainingMatches)`. Tests en `scenarios.test.ts` evaluando clasificados prematuros y mensajes de requerimientos (triunfo por diferencia de gol, empate, etc.).
+  - Cubre: RF-73, RF-74, RF-75 · Principio 3 · D25.
+- [x] **T52 · UI: Indicadores visuales en tablas y badges en cruces** — En `LeagueTable.tsx` y tablas de grupos, estilo verde brillante en filas en puestos de clasificación y badge "Clasificado" con check verde. En `LeagueMatchCard.tsx` y tarjetas de fase de grupos en las últimas 2 o 3 fechas, banner con el escenario sugerido ("Ganando clasificás", "Empate te asegura podio", etc.).
+  - Cubre: RF-73, RF-74, RF-75.
+
+## Fase O — Historial Global, Head-to-Head y Ranking Anual Ponderado
+
+- [x] **T53 · Dominio y Tests: Registro H2H, cálculo de distinciones y Ranking Anual escalado** — Módulo puro `src/domain/awardsAndRankings.ts` con funciones puras: `updateHeadToHead(currentH2H, matches)`, `computePlayerAwards(players, matches, history)` (Bota de Oro, Madera, Valla Invicta), y `computeAnnualRanking(history, year)` con ponderación por participantes ($10 \times N/4$, $7 \times N/4$, etc.). Tests en `awardsAndRankings.test.ts`.
+  - Cubre: RF-76, RF-77, RF-78 · Principio 3 · D26.
+- [x] **T54 · Persistencia y Estado: Migración de schema (versión 2) y acumulación en TOURNAMENT_FINISHED** — Actualizar `SCHEMA_VERSION = 2` en `schema.ts`. En `storage.ts`, migrador automático de datos v1 a v2 asegurando valores por defecto seguros. En `reducer.ts`, acumulación de H2H y Ranking Anual al despachar `TOURNAMENT_FINISHED`. Tests en `storage.test.ts` y `reducer.test.ts`.
+  - Cubre: RF-76, RF-78, RF-80 · Principio 6 · D26, D27.
+- [x] **T55 · UI: Pestañas de estadísticas en StandingsView** — Selector de pestañas en `StandingsView.tsx`: "Tabla General", "Ranking Anual Ponderado", "Duelos Directos (H2H)" con selector de 2 jugadores cara a cara, y vitrina de "Premios y Récords" (Bota de Oro, Premio de Madera, Valla Invicta).
+  - Cubre: RF-76, RF-77, RF-78, RF-79.
+
+## Fase P — Verificación Integral v2.0 (DoD)
+
+- [x] **T56 · Verificación Integral y DoD v2.0** — Ejecución completa de la suite de pruebas unitarias (`npm test`), verificación de build de producción (`npm run build`), prueba de compatibilidad de almacenamiento con migraciones y revisión de textos en español rioplatense.
+  - Cubre: Criterios de Finalización (DoD v2.0 spec §5).
+
+## Fase Q — Pulido de Experiencia (UI/UX)
+
+- [x] **T57 · Dominio y Tests: Distribución de puntos del torneo y cálculo de participantes matemáticamente eliminados ("Sin chances")** — En `src/domain/awardsAndRankings.ts`, implementar la función pura `getTournamentPointsDistribution(participantCount: number)` que calcula los puntos de Campeón ($10 \times N/4$), Subcampeón ($7 \times N/4$), 3° ($5 \times N/4$), 4° ($3 \times N/4$) y participación (+1). En `src/domain/scenarios.ts`, implementar y exportar `calculateMathematicalElimination(standings, remainingMatches, qualifyingSpots)` que determina para cada participante si sus puntos máximos teóricos son insuficientes para alcanzar la zona de clasificación frente a los puntos ya consolidados de los rivales. Tests en `awardsAndRankings.test.ts` y `scenarios.test.ts` evaluando torneos de 4, 6, 8, 9 y 10 jugadores.
+  - Cubre: RF-83 (lógica matemática), RF-84 (lógica matemática) · Principio 3 · D30, D31.
+- [x] **T58 · UI: Selección de Temática Manual en ThemeView** — En `ThemeView.tsx`, agregar un selector desplegable o interactivo con todas las temáticas disponibles (`getAllThemes`) y un botón de confirmación ("Elegir temática") que dispare `THEME_SET` directamente sin animación de ruleta, actualizando la temática activa y permitiendo avanzar de inmediato al Draft.
+  - Cubre: RF-81 · D28.
+- [x] **T59 · UI: Animación secuencial de revelado en Sorteo Automático de DraftView** — En `DraftView.tsx`, ante el sorteo automático (`handleAutoAssign`), añadir una animación secuencial de revelado paso a paso con intervalo/delay que descubra el equipo asignado a cada participante con suspenso progresivo antes de confirmar las asignaciones en el estado y habilitar el avance a la competencia.
+  - Cubre: RF-82 · D29.
+- [x] **T60 · UI: Indicador de "Sin chances / Eliminado" y leyenda contextual en tablas de posiciones** — En `LeagueTable.tsx` (y su integración en `LeagueView.tsx` y `GroupStageView.tsx`), recibir y evaluar el mapa de eliminados matemáticos, renderizando un badge "Sin chances" (estilo rojo/gris apagado) junto al nombre del jugador para quienes ya no puedan alcanzar los puestos de corte. Agregar sobre la tabla un banner/leyenda contextual clara indicando el cupo de clasificación según la modalidad y cantidad de jugadores (ej. "Los primeros 4 clasifican al Reducido", "1° y 2° de cada grupo clasifican a Semifinales", "Los primeros 2 clasifican a la Final").
+  - Cubre: RF-83 · D30.
+- [x] **T61 · UI: Banner informativo de Puntos del Torneo Activo en Header** — En `Header.tsx` (o sub-cabecera del torneo activo), si hay un torneo en curso (`activeTournament`), calcular la distribución de puntos con `getTournamentPointsDistribution` y exhibir un banner deportivo retro con icono de trofeo informando los puntos en juego para el Ranking Anual (ej: "🏆 Torneo de 8 participantes — Campeón: 20 pts | Subcampeón: 14 pts | 3°: 10 pts | 4°: 6 pts").
+  - Cubre: RF-84 · D31.
+- [x] **T62 · Verificación Integral y DoD de Fase Q** — Ejecución de la suite completa de tests de Vitest (`npm test`), verificación de build de producción (`npm run build`) y validación de flujo completo en navegador de las nuevas características de UI/UX sin advertencias de consola.
+  - Cubre: Criterios de Finalización (DoD Pulido UI/UX spec §5).
+
+## Fase R — Hotfixes de Torneo
+
+- [x] **T63 · Dominio, Persistencia y Tests: Puntos enteros, mensaje estricto de eliminación, acumulación de TR/TA y Podios** — En `src/domain/awardsAndRankings.ts`, actualizar `getTournamentPointsDistribution` y `computeAnnualRanking` aplicando `Math.round` a todos los puestos ($10 \times N/4$, etc.) para garantizar enteros estrictos sin decimales. En `src/domain/scenarios.ts`, verificar al inicio de `derivePlayerGuidance` si el jugador está matemáticamente eliminado devolviendo estrictamente `"Eliminado matemáticamente"` o `"Sin chances"`. En `src/domain/types.ts`, `schema.ts`, `storage.ts` y `reducer.ts`, registrar y acumular tarjetas rojas (`redCards`), amarillas (`yellowCards`) y `podiums` (1°, 2° y 3° puesto) en `PlayerStats` y `AnnualRankingEntry` al despachar `TOURNAMENT_FINISHED`. En `StandingsView.tsx`, añadir columnas para TR, TA y Podios. Tests unitarios en `awardsAndRankings.test.ts`, `scenarios.test.ts` y `storage.test.ts`.
+  - Cubre: RF-85 · Principio 3, Principio 6 · D32, D33, D34.
+- [x] **T64 · UI: Selector de clasificados en Liga + Reducido y botón de Sortear Formato en RegistrationView** — En `RegistrationView.tsx`, cuando la modalidad seleccionada sea "Liga + Reducido", mostrar un control numérico/selector interactivo de cantidad de clasificados a playoffs (2, 4 u 8 según $N$), propagando `qualifyingSpots` al estado y creación del torneo. Junto a los botones de modalidad, incorporar el botón "Sortear Formato" con icono de dados/azar para elegir aleatoriamente una modalidad compatible con los jugadores seleccionados (o entre todas las modalidades disponibles).
+  - Cubre: RF-86 · D35.
+- [x] **T65 · Dominio y UI: Armado manual de cruces y asignación de Byes en Llaves y Doble Eliminación** — En `src/domain/bracket.ts` y `src/domain/doubleElimination.ts`, admitir la configuración/ordenamiento manual de participantes respetando las asignaciones de cruces iniciales y Byes. En `src/state/actions.ts` y `reducer.ts`, soportar acciones `BRACKET_MATCHUPS_MANUALLY_SET` y `DOUBLE_ELIMINATION_MATCHUPS_MANUALLY_SET` permitidas antes de confirmar cualquier partido de la serie. En `BracketView.tsx` y `DoubleEliminationView.tsx`, renderizar un panel/modal interactivo de "Armado Manual de Cruces" cuando no haya partidos disputados, permitiendo al Admin seleccionar a dedo qué jugador enfrenta a quién y a quién se le asigna el Bye mediante selectores que evitan participantes duplicados.
+  - Cubre: RF-87 · D36.
+- [x] **T66 · Hotfix UI y Dominio: Selector desplegable de clasificados y Playoffs asimétricos con Byes en Liga + Reducido** — En `RegistrationView.tsx`, reemplazar el input numérico de `qualifyingSpots` por un `<select>` con opciones desde 2 hasta el total de participantes seleccionados ($N$). En `src/domain/leaguePlayoffs.ts`, asegurar que `generatePlayoffsBracketFromStandings` respete exactamente el número de `qualifyingSpots` elegido por el usuario sin redondear a potencias de 2, delegando en `generateBracket` para generar brackets asimétricos con Byes para los mejores clasificados de la fase regular.
+  - Cubre: RF-86, RF-68.
+- [x] **T67 · Hotfix Visual: Indicador dinámico de cupos y resaltado verde de clasificados en Liga + Reducido** — En `LeagueView.tsx` y `LeagueTable.tsx`, leer el valor real de `qualifyingSpots` desde `activeTournament.qualifyingSpots` sin redondeos ni fallbacks estáticos. Mostrar los textos dinámicos "Los primeros {qualifyingSpots} clasifican al Reducido" y "Cupos: {qualifyingSpots}". Pintar exactamente las primeras `qualifyingSpots` filas con el estilo verde de clasificación y badge "Reducido".
+  - Cubre: RF-83, RF-86.
+
+
+
+
+
 

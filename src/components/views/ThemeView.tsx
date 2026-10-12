@@ -1,8 +1,10 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
+  Check,
   ChevronRight,
   Disc3,
   Dices,
+  ListFilter,
   Plus,
   RotateCcw,
   Sparkles,
@@ -34,6 +36,17 @@ export function ThemeView({ onProceedToDraft }: ThemeViewProps) {
     currentTheme ?? '¿Qué temática te toca?'
   );
   const [spinning, setSpinning] = useState(false);
+
+  // Selector manual interactivo (RF-81)
+  const [manualThemeSelection, setManualThemeSelection] = useState<string>(
+    currentTheme ?? (availableThemes[0] || '')
+  );
+
+  useEffect(() => {
+    if (currentTheme) {
+      setManualThemeSelection(currentTheme);
+    }
+  }, [currentTheme]);
 
   // Form for custom theme (RF-57)
   const [newTheme, setNewTheme] = useState('');
@@ -71,6 +84,14 @@ export function ThemeView({ onProceedToDraft }: ThemeViewProps) {
     };
 
     tick();
+  };
+
+  const handleSelectManualTheme = (themeToSet?: string) => {
+    const chosen = themeToSet ?? manualThemeSelection;
+    if (!chosen || spinning || isLocked) return;
+    setManualThemeSelection(chosen);
+    setDisplay(chosen);
+    dispatch({ type: 'THEME_SET', theme: chosen });
   };
 
   const handleAddTheme = (e: FormEvent) => {
@@ -112,7 +133,7 @@ export function ThemeView({ onProceedToDraft }: ThemeViewProps) {
         subtitle={
           currentTheme
             ? `Elegida: ${currentTheme}`
-            : 'Girá la ruleta para definir la temática'
+            : 'Girá la ruleta o elegí directamente la temática'
         }
       >
         <div className="flex flex-col items-center gap-6 py-4">
@@ -171,6 +192,58 @@ export function ThemeView({ onProceedToDraft }: ThemeViewProps) {
                   : `Tocá para sortear entre las ${availableThemes.length} temáticas disponibles.`}
             </span>
           </div>
+
+          {/* Selector interactivo directo (RF-81) */}
+          {!isLocked && availableThemes.length > 0 && (
+            <div className="w-full rounded-sm border border-border/80 bg-secondary/30 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <label
+                  htmlFor="manual-theme-select"
+                  className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"
+                >
+                  <ListFilter className="h-4 w-4 text-accent" />
+                  Elegir temática a mano (saltar ruleta)
+                </label>
+                {currentTheme && (
+                  <span className="text-[11px] font-semibold text-primary">
+                    Seleccionada: {currentTheme}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <select
+                  id="manual-theme-select"
+                  value={manualThemeSelection}
+                  disabled={spinning || isLocked}
+                  onChange={(e) => setManualThemeSelection(e.target.value)}
+                  className={`flex-1 text-sm bg-background font-sans ${inputClassName}`}
+                >
+                  <option value="" disabled>
+                    -- Seleccioná una temática de la lista --
+                  </option>
+                  {availableThemes.map((theme) => (
+                    <option
+                      key={theme}
+                      value={theme}
+                      className="bg-background text-foreground"
+                    >
+                      {theme}
+                    </option>
+                  ))}
+                </select>
+
+                <SecondaryButton
+                  type="button"
+                  disabled={spinning || isLocked || !manualThemeSelection}
+                  onClick={() => handleSelectManualTheme()}
+                  className="px-5 py-2 text-xs font-semibold"
+                >
+                  <Check className="h-4 w-4 text-primary" /> Elegir temática
+                </SecondaryButton>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Sección de Temáticas Disponibles (RF-56, RF-57) */}
@@ -179,22 +252,29 @@ export function ThemeView({ onProceedToDraft }: ThemeViewProps) {
             <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
               Temáticas disponibles en la ruleta ({availableThemes.length})
             </label>
+            <span className="text-[11px] text-muted-foreground">
+              Hacé click en un chip para elegirlo directamente
+            </span>
           </div>
 
-          {/* Lista de chips / badges (RF-56) */}
+          {/* Lista de chips / badges interactivos (RF-56, RF-81) */}
           <div className="flex flex-wrap gap-2">
             {availableThemes.map((theme) => {
               const isSelected = currentTheme === theme;
               const isCustom = !(THEMES as readonly string[]).includes(theme);
 
               return (
-                <span
+                <button
+                  type="button"
                   key={theme}
-                  className={`flex items-center gap-1.5 rounded-sm border px-3 py-1.5 text-xs font-semibold transition ${
+                  disabled={spinning || isLocked}
+                  onClick={() => handleSelectManualTheme(theme)}
+                  className={`flex items-center gap-1.5 rounded-sm border px-3 py-1.5 text-xs font-semibold transition cursor-pointer ${
                     isSelected
                       ? 'border-primary bg-primary/20 text-primary shadow-[0_0_10px_rgba(74,222,128,0.2)] ring-1 ring-primary'
-                      : 'border-border bg-background/60 text-muted-foreground'
+                      : 'border-border bg-background/60 text-muted-foreground hover:border-primary/50 hover:text-foreground'
                   }`}
+                  title={`Elegir directamente "${theme}"`}
                 >
                   <Sparkles
                     className={`h-3 w-3 ${
@@ -207,7 +287,7 @@ export function ThemeView({ onProceedToDraft }: ThemeViewProps) {
                       Custom
                     </span>
                   )}
-                </span>
+                </button>
               );
             })}
           </div>

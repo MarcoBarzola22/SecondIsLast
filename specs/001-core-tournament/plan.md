@@ -1,228 +1,242 @@
-# Plan 001 — Core Tournament (MVP)
+# Plan 001 — Core Tournament & Versión 2.0 Local
 
-> Implementa `specs/001-core-tournament/spec.md` (aprobada). Respeta `docs/constitution.md`.
-> Aprobación explícita del usuario: se agrega **Vitest** solo para testear `src/domain/`.
+> Implementa `specs/001-core-tournament/spec.md`. Respeta rigurosamente `docs/constitution.md`.
+> Arquitectura pura en `src/domain/`, persistencia versionada en `src/storage/`, UI reactiva con Tailwind y sin backend.
 
 ## 1. Decisiones Técnicas
 
 | # | Decisión | Motivo |
 |---|---|---|
-| D1 | **App nueva con Vite + React 19 + TS (`strict`) en la raíz del repo.** La maqueta (`pixel-perfect-screenshot-main/`) se usa solo como referencia para copiar JSX y estilos. | La maqueta usa TanStack Start (SSR, server functions, router), que viola el principio 1. Además, el SSR genera problemas de hidratación con `localStorage`. |
-| D2 | **Dependencias finales:** `react`, `react-dom`, `lucide-react`, `tailwindcss` + `@tailwindcss/vite` (v4). Dev: `typescript`, `vite`, `@vitejs/plugin-react`, `vitest`. **Nada más.** | Principio 1. Lucide y Tailwind ya estaban en la maqueta. Vitest está aprobado. |
-| D3 | **Estado global con Context + `useReducer`** (sin Zustand). | Zustand sería una dependencia nueva. Un reducer alcanza para un solo árbol de estado. |
-| D4 | **Reducer delgado:** cada acción delega en funciones puras de `src/domain/`. Ni el reducer ni los componentes calculan reglas de negocio. | Principio 3. |
-| D5 | **Autosave:** un `useEffect` en el Provider llama a `saveAppData(state)` cada vez que cambia el estado. Lectura única al montar (`loadAppData`). | RF-39, RF-40. Simple y suficiente para el tamaño de los datos. |
-| D6 | **Una sola clave de storage** (`second-is-last:data`) con todo el `AppData`. | Escritura atómica: finalizar el torneo (RF-31/RF-33) actualiza estadísticas, historial y torneo activo de una sola vez. |
-| D7 | **Sin router.** Navegación por `view` local en `App`. La vista inicial se deriva de `activeTournament.phase` (RF-40). | Principio 1. Una SPA de 5 vistas no necesita router. |
-| D8 | **Azar inyectable:** toda función de dominio que sortea recibe `rng: () => number` (por defecto, `Math.random`). | Tests deterministas. |
-| D9 | **IDs:** `crypto.randomUUID()` para jugadores y torneos, generados fuera de `domain/` (en el reducer) y pasados como argumento. | Mantiene el dominio puro. |
-| D10 | **Estilos:** se copian los tokens y utilidades de la maqueta (`panel-metal`, `glow-*`, `text-glow`, colores oklch) a `src/index.css`. Fuentes Orbitron y Chakra Petch vía Google Fonts en `index.html`. Se descarta `tw-animate-css`. | Fidelidad visual sin dependencias extra. |
-| D11 | **Temática:** se elimina la pestaña "manual" de la maqueta. Solo queda la ruleta (RF-7 a RF-9). | Fidelidad a la spec. |
-| D12 | **Abandonar torneo:** confirmación con `window.confirm`. | Cero dependencias, suficiente para el MVP. |
-| D13 | **Eliminar jugadores y resetear tabla:** `PLAYER_REMOVED` elimina al jugador de `players` y limpia sus `stats`. Bloqueado si participa en un torneo activo en curso. `STANDINGS_RESET` limpia `stats: {}` e `history: []` manteniendo `players` intactos. Confirmación estricta con `window.confirm`. | RF-46, RF-47. Principio 2, 4. |
-| D14 | **Modalidad de Partido en Llaves:** `MatchFormat = 'two_legged' | 'single_match'`. Si es `'single_match'`, la UI solo renderiza `leg1`. En empate, se decide por penales. Estadísticas acumulan solo los goles de `leg1`. | RF-21, RF-49. Principio 3. |
-| D15 | **Modalidad de Torneo (Liga Round Robin):** `TournamentType = 'bracket' | 'league'`. En modo Liga, `src/domain/league.ts` genera el fixture (algoritmo Berger) con fechas y partidos únicos. Los partidos admiten empate (PG 3 pts, PE 1 pt, PP 0 pts). La tabla interna del torneo ordena por PTS ↓, DG ↓, GF ↓, nombre. Al confirmar todos los partidos, el podio (1° a 4°) habilita `TOURNAMENT_FINISHED`. | RF-48, RF-50, RF-51, RF-53, RF-54, RF-55. |
-| D16 | **Sorteo Automático de Equipos:** en `src/domain/draft.ts`, `assignTeamsAutomatically(participantIds, teamNames, rng)`. Valida N nombres no vacíos y no repetidos, los mezcla con Fisher-Yates y asigna aleatoriamente a los participantes. | RF-11, RF-52. Principio 3. |
-| D17 | **Temáticas personalizadas:** en `AppData`, `customThemes: string[]`. En `src/domain/theme.ts`, `validateCustomTheme(name, existing)` y `getAllThemes(customThemes)`. Validación estricta contra vacíos y duplicados. En `ThemeView`, chips con las temáticas y formulario de carga rápida. | RF-56, RF-57, RF-58. Principio 2, 3. |
-| D18 | **Liga Ida y Vuelta (Doble Round Robin):** `generateLeagueFixture` acepta `matchFormat: MatchFormat = 'single_match'`. Si es `'two_legged'`, genera la segunda rueda replicando las fechas invirtiendo localías (`home <-> away`) y asignando números de fecha consecutivos. En `RegistrationView`, el selector de formato de partido se mantiene siempre visible para ambos tipos de torneo. | RF-49, RF-50, RF-59. Principio 3. |
-| D19 | **Ampliación a 10 participantes (Base 8 y Base 16):** Límite ampliado de 4 a 10 en Registro y Reducer. `generateBracket` en `src/domain/bracket.ts` soporta: 7 jugadores (3 QFs, 1 Bye a SF), 8 jugadores (4 QFs, 0 Byes), 9 jugadores (1 Play-in Octavos `R16_1`, 7 Byes a Cuartos), 10 jugadores (2 Play-ins Octavos `R16_1` y `R16_2`, 6 Byes a Cuartos). En `src/domain/league.ts`, el algoritmo Berger maneja participantes impares (7 y 9) con 1 libre por fecha. En `BracketView`, se añade la columna "Octavos" si existen series de esa ronda. | RF-6, RF-17, RF-50, RF-60. Principio 3. |
+| D1 | **Vite + React 19 + TS (`strict`) en la raíz del repo.** | Cumplimiento estricto del Principio 1. |
+| D2 | **Dependencias mínimas:** `react`, `react-dom`, `lucide-react`, `tailwindcss` (v4). Dev: `typescript`, `vite`, `vitest`. | Principio 1. Cero librerías pesadas externas. |
+| D3 | **Estado global con Context + `useReducer`** (sin Zustand/Redux). | Un solo árbol de estado predecible y serializable. |
+| D4 | **Reducer delgado:** toda lógica de cálculo se delega en funciones puras de `src/domain/`. | Principio 3 de la Constitución. |
+| D5 | **Autosave:** `useEffect` en `AppContext` sincroniza con `saveAppData` ante cada cambio de estado. | Persistencia automática e ininterrumpida. |
+| D6 | **Almacenamiento atómico:** clave única `second-is-last:data` en `localStorage`. | Evita inconsistencias de estado parcial. |
+| D7 | **Navegación por estado:** vista derivada de `activeTournament.phase` con accesos a Registro y Tabla. | Sin routers innecesarios. |
+| D8 | **Azar inyectable:** funciones con sorteo reciben `rng: () => number` (`Math.random` por defecto). | Pruebas unitarias 100% deterministas. |
+| D9 | **IDs universales:** `crypto.randomUUID()` generado en acciones/reducer. | Dominio desacoplado y puro. |
+| D10 | **Tokens visuales:** tema oscuro deportivo con panel metalizado, neón y fuentes Orbitron / Chakra Petch. | Estética gamer retro de PES 6. |
+| D11 | **Temáticas personalizadas:** `customThemes: string[]` en `AppData`. | Flexibilidad para el usuario. |
+| D12 | **Abandono global:** `TOURNAMENT_ABANDONED` cancela el torneo activo preservando el historial. | Acción de escape para el organizador. |
+| D13 | **Eliminar jugadores y resetear tabla:** eliminación segura de jugadores y reseteo atómico. | Mantenimiento del historial. |
+| D14 | **Modalidad de Partido en Llaves:** `MatchFormat = 'two_legged' | 'single_match'`. | Adaptabilidad del tiempo de la juntada. |
+| D15 | **Liga Round Robin:** algoritmo Berger con fechas, tabla interna y podio final. | Formato liga tradicional. |
+| D16 | **Sorteo Automático de Equipos:** asignación rápida 1 a 1 de N equipos mediante Fisher-Yates. | Agilidad en el Draft. |
+| D17 | **Temáticas dinámicas en ruleta:** integración de temas base y personalizados. | Variedad de juego. |
+| D18 | **Liga a Ida y Vuelta:** dos ruedas completas con inversión de localía. | Competencia extendida. |
+| D19 | **Ampliación a 10 participantes:** soporte de Play-in Octavos en Llaves y Berger para números impares con libre. | Escalabilidad de jugadores. |
+| D20 | **Fair Play y Desempates (Tarjetas & H2H):** Tarjetas en partidos (`yellowCardsA`, `redCardsA`, etc.). Función pura `sortStandingsWithFairPlay` implementa el orden: 1) PTS, 2) DG, 3) H2H (mini-tabla de duelos directos), 4) PG, 5) Menos TR, 6) Menos TA, 7) Alfabético. | Criterio deportivo justo y transparente (RF-61..63). |
+| D21 | **Walkover individual por Jugador (Abandono 3-0):** Acción `PLAYER_WALKOVER_DECLARED`. Función pura `applyWalkoverToTournament(tournament, playerId)` sobreescribe todos los partidos (jugados y por jugar) con resultado 0-3 en contra del desertor, avanza al rival en cruces de eliminación directa y recalcula la tabla en tiempo real. | Trato justo e igualitario para todos los rivales (RF-64..66). |
+| D22 | **Fase de Grupos (6 y 9 participantes):** Módulo puro `src/domain/groupStage.ts`. 6 jugadores: 2 grupos de 3 (clasifican 1° y 2° a Semis). 9 jugadores: 3 grupos de 3 (clasifican 1° de cada grupo + mejor 2° por tabla comparativa). Configuración de grupos a Partido Único o Ida y Vuelta. Transición automática a playoffs. | Nueva modalidad de copa corta (RF-67). |
+| D23 | **Liga + Reducido:** Módulo puro `src/domain/leaguePlayoffs.ts`. Fase regular Round Robin completa. Al finalizar, generación automática de cuadro de eliminación: top 4 a Semis (6 u 8 participantes), top 8 a Cuartos (10 participantes), top 2 a Final (4 participantes). | Emoción de liguilla final (RF-68). |
+| D24 | **Doble Eliminación (Winner & Loser Bracket):** Módulo puro `src/domain/doubleElimination.ts`. Cuadro con WB y LB para 4 a 10 participantes con Byes asimétricos. Grand Final con opción de Bracket Reset obligatorio si el campeón de LB gana la primera serie. | Formato esports de alta competencia (RF-69). |
+| D25 | **Calculadora de Escenarios (Smart UI):** Módulo puro `src/domain/scenarios.ts`. Calcula clasificados matemáticos (`isMathematicallyQualified`) comparando puntos máximos alcanzables de los rivales fuera de zona, y genera mensajes explicativos de escenarios en tarjetas de partidos en las últimas 2 o 3 fechas. | Claridad estratégica para los participantes (RF-73..75). |
+| D26 | **Historial Avanzado, Premios y Ranking Anual Ponderado:** Módulo puro `src/domain/awardsAndRankings.ts`. Registro H2H acumulado entre cada par de jugadores, distinciones honoríficas (Bota de Oro, Premio de Madera, Valla Invicta) y Ranking Anual con puntaje escalado según tamaño del torneo ($10 \times N/4$, etc.). | Incentivo competitivo a largo plazo (RF-76..79). |
+| D27 | **Migración transparente de Storage a Schema v2:** `SCHEMA_VERSION = 2`. El adaptador `loadAppData` migra estados v1 asegurando campos por defecto (`fairPlay`, `headToHead: {}`, `annualRankings: {}`, `walkovers: []`) sin romper datos guardados. | Principio 6 de la Constitución (RF-80). |
+| D28 | **Selección Manual de Temática Directa:** Selector o dropdown interactivo en `ThemeView` para elegir cualquier temática disponible (predeterminada o personalizada) y fijarla con `THEME_SET` sin obligar a girar la ruleta. | Agilidad operativa si el grupo ya decidió qué jugar (RF-81). |
+| D29 | **Animación de Revelado Secuencial en Draft Automático:** En `DraftView`, el sorteo automático de equipos ejecuta una animación paso a paso (revelado progresivo con suspenso / efecto ruleta individual) antes de fijar las asignaciones completas. | Emoción y dramatismo en el sorteo (RF-82). |
+| D30 | **Detección de Eliminación Matemática ("Sin chances") y Leyenda de Corte:** Función pura `calculateMathematicalElimination` en `src/domain/scenarios.ts` para marcar con badge rojo/gris a los participantes sin posibilidad matemática de alcanzar el cupo clasificatorio. Banner explicativo contextual sobre la tabla indicando cuántos avanzan a playoffs o final. | Claridad competitiva total para los participantes (RF-83). |
+| D31 | **Banner Informativo de Puntos del Torneo Activo:** Función pura `getTournamentPointsDistribution(participantCount)` en `src/domain/awardsAndRankings.ts` y componente informativo en `Header` o cabecera que exhibe el desglose de puntos a repartir para el Ranking Anual según $N$. | Visibilidad y motivación competitiva en vivo (RF-84). |
 
 ## 2. Estructura de Carpetas
 
 ```
 / (raíz del repo)
-├─ index.html                 # Google Fonts + <div id="root">
+├─ index.html
 ├─ package.json  vite.config.ts  vitest.config.ts  tsconfig.json
-├─ docs/  specs/              # SDD
-├─ pixel-perfect-screenshot-main/   # referencia visual
+├─ docs/  specs/
 └─ src/
-   ├─ main.tsx                # ErrorBoundary + AppProvider + App
-   ├─ App.tsx                 # shell: Header + switch de vistas
-   ├─ index.css               # Tailwind v4 + tokens portados
-   ├─ domain/                 # PURO: sin React, sin storage, sin side-effects
-   │  ├─ types.ts
-   │  ├─ random.ts            # shuffle (Fisher-Yates)
-   │  ├─ players.ts           # normalizeName, isDuplicatePlayer, formatPlayerName, removePlayer
-   │  ├─ theme.ts             # THEMES, pickRandomTheme
-   │  ├─ draft.ts             # createDraftOrder, getCurrentDrafter, validateTeamName, assignTeamsAutomatically
-   │  ├─ bracket.ts           # generateBracket
-   │  ├─ series.ts            # getSeriesResult, setLegScore, confirmSeries, canEditSeries (Ida/Vuelta y Partido Único)
-   │  ├─ league.ts            # generateLeagueFixture, computeLeagueTable, isLeagueComplete, getLeaguePodium
-   │  ├─ standings.ts         # getPodium, computeTournamentStats, applyStats, buildStandings, resetStandings
-   │  └─ __tests__/*.test.ts
+   ├─ main.tsx
+   ├─ App.tsx
+   ├─ index.css
+   ├─ domain/                         # PURO: reglas de negocio sin React
+   │  ├─ types.ts                    # Modelo completo de tipos v2.0
+   │  ├─ random.ts                   # shuffle (Fisher-Yates)
+   │  ├─ players.ts                  # normalizeName, removePlayer
+   │  ├─ theme.ts                    # base + personalizadas
+   │  ├─ draft.ts                    # draft manual y automático
+   │  ├─ bracket.ts                  # llaves clásicas simples
+   │  ├─ series.ts                   # series con soporte Fair Play (tarjetas)
+   │  ├─ league.ts                   # fixture Berger y tabla con Fair Play
+   │  ├─ groupStage.ts               # grupos (6 y 9 jugadores) y clasificación
+   │  ├─ leaguePlayoffs.ts           # liga regular + reducido
+   │  ├─ doubleElimination.ts        # bracket WB, LB y Grand Final con reset
+   │  ├─ walkover.ts                 # aplicación de W.O. 0-3 y recálculo
+   │  ├─ scenarios.ts                # zonas de clasificación y calculadora de cruces
+   │  ├─ awardsAndRankings.ts        # H2H, distinciones y ranking anual ponderado
+   │  ├─ standings.ts                # tabla histórica y podios
+   │  └─ __tests__/*.test.ts         # Vitest suites por cada módulo
    ├─ storage/
-   │  ├─ schema.ts            # AppData, SCHEMA_VERSION, createEmptyAppData, isAppData
-   │  └─ storage.ts           # loadAppData, saveAppData (localStorage)
+   │  ├─ schema.ts                   # Schema v2 + migración de v1
+   │  └─ storage.ts                  # lectura/escritura con try/catch seguro
    ├─ state/
-   │  ├─ actions.ts           # unión de Action
-   │  ├─ reducer.ts           # appReducer (delegando en domain)
-   │  └─ AppContext.tsx       # AppProvider, useAppState, useAppDispatch, autosave
+   │  ├─ actions.ts                  # acciones v2.0
+   │  ├─ reducer.ts                  # appReducer delgado
+   │  └─ AppContext.tsx              # provider, hooks y autosave
    └─ components/
-      ├─ ui/                  # Panel, PrimaryButton, SecondaryButton, DangerButton, inputClassName
-      ├─ layout/Header.tsx    # logo + StepNav + "Abandonar torneo"
+      ├─ ui/                         # primitivas visuales (botones, badges, tarjetas)
+      ├─ layout/Header.tsx           # StepNav + abandono
       ├─ ErrorBoundary.tsx
       └─ views/
-         ├─ RegistrationView.tsx   # Registro + selectores de modalidades + borrado de jugadores
-         ├─ ThemeView.tsx          # Ruleta de temáticas
-         ├─ DraftView.tsx          # Asignación Manual vs Sorteo Automático
-         ├─ BracketView.tsx  SeriesCard.tsx  PodiumPanel.tsx # Llaves (Ida y Vuelta o Partido Único)
-         ├─ LeagueView.tsx   LeagueMatchCard.tsx  LeagueTable.tsx # Liga Round Robin
-         └─ StandingsView.tsx      # Tabla histórica + botón resetear con confirmación
+         ├─ RegistrationView.tsx     # selectores de las 5 modalidades
+         ├─ ThemeView.tsx            # ruleta + badges de temas
+         ├─ DraftView.tsx            # manual o automático
+         ├─ BracketView.tsx          # llaves con tarjetas y walkover
+         ├─ LeagueView.tsx           # liga con Smart UI, tarjetas y walkover
+         ├─ GroupStageView.tsx       # vista de fase de grupos y playoffs
+         ├─ DoubleEliminationView.tsx# vista WB, LB y Grand Final
+         └─ StandingsView.tsx        # pestañas: General, Anual, H2H y Premios
 ```
 
-## 3. Modelo de Datos (`src/domain/types.ts` + `src/storage/schema.ts`)
+## 3. Modelo de Datos (`src/domain/types.ts` & `src/storage/schema.ts`)
 
 ```ts
-// ---------- domain/types.ts ----------
 export type PlayerId = string;
 
 export interface Player {
   id: PlayerId;
   firstName: string;
   lastName: string;
-  createdAt: string; // ISO
+  createdAt: string;
 }
 
-/** Historical accumulated stats. DG is derived (gf - gc), never stored. */
-export interface PlayerStats {
-  playerId: PlayerId;
-  pts: number; pj: number; pg: number; pp: number;
-  gf: number; gc: number; tj: number;
-}
+export type TournamentType =
+  | 'bracket'            // Llaves clásicas
+  | 'league'             // Liga Round Robin
+  | 'group_stage'        // Fase de Grupos (6 o 9 participantes)
+  | 'league_playoffs'    // Liga regular + Playoffs
+  | 'double_elimination';// Doble Eliminación
 
-export type TournamentType = 'bracket' | 'league';
 export type MatchFormat = 'two_legged' | 'single_match';
 
-export type SeriesId =
-  | 'R16_1'
-  | 'R16_2'
-  | 'QF1'
-  | 'QF2'
-  | 'QF3'
-  | 'QF4'
-  | 'SF1'
-  | 'SF2'
-  | 'F'
-  | 'TP'; // TP = 3er puesto
-export type Round =
-  | 'round_of_16'
-  | 'quarterfinal'
-  | 'semifinal'
-  | 'final'
-  | 'third_place';
-export type Side = 'a' | 'b';
+export type TournamentPhase =
+  | 'theme'
+  | 'draft'
+  | 'bracket'
+  | 'league'
+  | 'group_stage'
+  | 'group_playoffs'
+  | 'league_playoffs'
+  | 'double_elimination';
 
-/** Goals per side in one leg. null = not entered yet. */
-export interface LegScore { a: number | null; b: number | null; }
+export interface CardCounts {
+  yellow: number;
+  red: number;
+}
 
-export interface SlotTarget { seriesId: SeriesId; side: Side; }
+export interface LegScore {
+  a: number | null;
+  b: number | null;
+  cardsA?: CardCounts;
+  cardsB?: CardCounts;
+}
 
 export interface Series {
-  id: SeriesId;
-  round: Round;
-  playerA: PlayerId | null;   // null = "Por definir"
+  id: string;
+  round: string;
+  playerA: PlayerId | null;
   playerB: PlayerId | null;
-  leg1: LegScore;             // En single_match, solo se usa leg1
-  leg2: LegScore;             // Vuelta (solo si two_legged)
-  penaltyWinner: PlayerId | null; // desempate
+  leg1: LegScore;
+  leg2: LegScore;
+  penaltyWinner: PlayerId | null;
   confirmed: boolean;
-  winnerTo: SlotTarget | null;
-  loserTo: SlotTarget | null;
+  winnerTo: { seriesId: string; side: 'a' | 'b' } | null;
+  loserTo: { seriesId: string; side: 'a' | 'b' } | null;
+  isWalkover?: boolean;
 }
 
 export interface LeagueMatch {
-  id: string;                 // ej. "R1_M1"
-  round: number;              // fecha (1..N)
+  id: string;
+  round: number;
   playerA: PlayerId;
   playerB: PlayerId;
   scoreA: number | null;
   scoreB: number | null;
+  cardsA?: CardCounts;
+  cardsB?: CardCounts;
   confirmed: boolean;
+  isWalkover?: boolean;
 }
 
-export interface LeagueStandingRow {
-  playerId: PlayerId;
-  displayName: string;
-  team: string;
-  pts: number; pj: number; pg: number; pe: number; pp: number;
-  gf: number; gc: number; dg: number;
+export interface GroupData {
+  id: 'A' | 'B' | 'C';
+  participantIds: PlayerId[];
+  matches: LeagueMatch[];
 }
 
-export type TournamentPhase = 'theme' | 'draft' | 'bracket' | 'league';
+export interface DoubleEliminationBracket {
+  winnerSeries: Series[];
+  loserSeries: Series[];
+  grandFinal: Series;
+  grandFinalReset?: Series; // Opcional, solo si el campeón de LB gana la primera final
+}
 
 export interface ActiveTournament {
   id: string;
-  createdAt: string;            // ISO
+  createdAt: string;
   phase: TournamentPhase;
-  tournamentType: TournamentType; // 'bracket' | 'league'
-  matchFormat: MatchFormat;       // 'two_legged' | 'single_match'
-  participantIds: PlayerId[];   // 4..10
-  theme: string | null;
-  draftOrder: PlayerId[];       // orden de selección o sorteo
-  teams: Record<PlayerId, string>;
-  byes: PlayerId[];             // para llaves
-  series: Series[];             // para llaves
-  leagueMatches: LeagueMatch[]; // para liga
-}
-
-export interface Podium {
-  champion: PlayerId; runnerUp: PlayerId; third: PlayerId; fourth: PlayerId;
-}
-
-export interface TournamentSummary {
-  id: string;
-  finishedAt: string;
   tournamentType: TournamentType;
-  matchFormat?: MatchFormat;
-  theme: string;
-  participants: { playerId: PlayerId; team: string }[];
-  podium: Podium;
+  matchFormat: MatchFormat;
+  participantIds: PlayerId[];
+  theme: string | null;
+  draftOrder: PlayerId[];
+  teams: Record<PlayerId, string>;
+  byes: PlayerId[];
+  walkoverPlayerIds: PlayerId[];
+  // Contenedores según modalidad
+  series?: Series[];
+  leagueMatches?: LeagueMatch[];
+  groups?: GroupData[];
+  playoffSeries?: Series[];
+  doubleElimination?: DoubleEliminationBracket;
 }
 
-export interface StandingsRow extends PlayerStats {
-  rank: number;
-  displayName: string; // "Apellido, Nombre"
-  dg: number;
+export interface HeadToHeadRecord {
+  playerA: PlayerId;
+  playerB: PlayerId;
+  played: number;
+  winsA: number;
+  draws: number;
+  winsB: number;
+  goalsA: number;
+  goalsB: number;
 }
 
-// ---------- storage/schema.ts ----------
-export const SCHEMA_VERSION = 1;
+export interface AnnualRankingEntry {
+  playerId: PlayerId;
+  pts: number;
+  tournamentsPlayed: number;
+  championships: number;
+  runnerUps: number;
+}
+
+export interface AwardsLeaderboard {
+  goldenBoot: { playerId: PlayerId; goals: number };
+  woodenSpoon: { playerId: PlayerId; losses: number };
+  cleanSheet: { playerId: PlayerId; cleanSheets: number };
+}
+
+export const SCHEMA_VERSION = 2;
+
 export interface AppData {
   schemaVersion: typeof SCHEMA_VERSION;
   players: Player[];
   stats: Record<PlayerId, PlayerStats>;
   activeTournament: ActiveTournament | null;
   history: TournamentSummary[];
+  customThemes?: string[];
+  headToHead?: Record<string, HeadToHeadRecord>; // key: "idA_idB" alfabético
+  annualRankings?: Record<string, Record<PlayerId, AnnualRankingEntry>>; // key: "YYYY"
 }
 ```
 
-### Reglas de cableado del bracket y fixture de liga
-
-- **Bracket (`generateBracket`):**
-  - Mismo algoritmo actual para 4, 5 y 6 jugadores con Byes en Cuartos.
-  - Si `matchFormat === 'single_match'`, cada serie evalúa solo `leg1`. Si empatan, `penaltyWinner` es obligatorio.
-- **Liga (`generateLeagueFixture`):**
-  - Algoritmo Berger / Round Robin para N participantes. Si N es impar (5), se usa un dummy "bye" para que en cada fecha descanse un participante.
-  - 4 jugadores: 3 fechas de 2 partidos (6 partidos).
-  - 5 jugadores: 5 fechas de 2 partidos + 1 libre (10 partidos).
-  - 6 jugadores: 5 fechas de 3 partidos (15 partidos).
-
-### Semántica de las funciones de `league.ts`
-
-- `generateLeagueFixture(participantIds, rng)`: genera las fechas y los partidos con IDs únicos `R{fecha}_M{partido}`.
-- `setLeagueMatchScore(matches, matchId, scoreA, scoreB)`: asigna goles.
-- `confirmLeagueMatch(matches, matchId)`: marca confirmado si ambos goles son válidos (0-99).
-- `reopenLeagueMatch(matches, matchId)`: desmarca confirmado para permitir corrección (RF-54).
-- `computeLeagueTable(matches, participantIds, teams, players)`: calcula la tabla de posiciones interna con puntos (PG=3, PE=1, PP=0), partidos jugados, goles y diferencia de gol.
-- `isLeagueComplete(matches)`: `true` cuando todos los partidos están confirmados.
-- `getLeaguePodium(leagueStandings)`: toma los 4 primeros de la tabla para el podio (1° Campeón, 2° Subcampeón, 3° Tercer Puesto, 4° Cuarto Puesto).
-
-## 4. Estado y Acciones (`src/state/`)
+## 4. Estado y Acciones (`src/state/actions.ts`)
 
 ```ts
-type Action =
-  | { type: 'PLAYER_ADDED'; player: Player }                    // RF-1..4
-  | { type: 'PLAYER_REMOVED'; playerId: PlayerId }              // RF-46
+export type Action =
+  | { type: 'PLAYER_ADDED'; player: Player }
+  | { type: 'PLAYER_REMOVED'; playerId: PlayerId }
   | {
       type: 'PARTICIPANTS_SET';
       participantIds: PlayerId[];
@@ -230,46 +244,111 @@ type Action =
       matchFormat: MatchFormat;
       tournamentId: string;
       now: string;
-    }                                                           // RF-5, RF-6, RF-48, RF-49
-  | { type: 'THEME_SET'; theme: string }                        // RF-8, RF-9
-  | { type: 'DRAFT_STARTED'; order: PlayerId[] }                // RF-11 (phase -> 'draft')
-  | { type: 'TEAM_ASSIGNED'; playerId: PlayerId; team: string } // RF-12..14
-  | { type: 'TEAMS_BATCH_ASSIGNED'; teams: Record<PlayerId, string> } // RF-52 (Sorteo automático)
-  | { type: 'BRACKET_GENERATED'; series: Series[]; byes: PlayerId[] } // RF-17..20 (phase -> 'bracket')
-  | { type: 'LEG_SCORE_SET'; seriesId: SeriesId; leg: 'leg1'|'leg2'; side: Side; value: number|null }
-  | { type: 'PENALTY_WINNER_SET'; seriesId: SeriesId; playerId: PlayerId|null }
-  | { type: 'SERIES_CONFIRMED'; seriesId: SeriesId }
-  | { type: 'SERIES_EDIT_REQUESTED'; seriesId: SeriesId }
-  | { type: 'LEAGUE_GENERATED'; matches: LeagueMatch[] }        // RF-50 (phase -> 'league')
-  | { type: 'LEAGUE_MATCH_SCORE_SET'; matchId: string; scoreA: number|null; scoreB: number|null }
+    }
+  | { type: 'THEME_SET'; theme: string }
+  | { type: 'CUSTOM_THEME_ADDED'; theme: string }
+  | { type: 'DRAFT_STARTED'; order: PlayerId[] }
+  | { type: 'TEAM_ASSIGNED'; playerId: PlayerId; team: string }
+  | { type: 'TEAMS_BATCH_ASSIGNED'; teams: Record<PlayerId, string> }
+  // Bracket & Series
+  | { type: 'BRACKET_GENERATED'; series: Series[]; byes: PlayerId[] }
+  | {
+      type: 'LEG_SCORE_SET';
+      seriesId: string;
+      leg: 'leg1' | 'leg2';
+      side: 'a' | 'b';
+      value: number | null;
+      cards?: CardCounts;
+    }
+  | { type: 'PENALTY_WINNER_SET'; seriesId: string; playerId: PlayerId | null }
+  | { type: 'SERIES_CONFIRMED'; seriesId: string }
+  | { type: 'SERIES_EDIT_REQUESTED'; seriesId: string }
+  // Liga
+  | { type: 'LEAGUE_GENERATED'; matches: LeagueMatch[] }
+  | {
+      type: 'LEAGUE_MATCH_SCORE_SET';
+      matchId: string;
+      scoreA: number | null;
+      scoreB: number | null;
+      cardsA?: CardCounts;
+      cardsB?: CardCounts;
+    }
   | { type: 'LEAGUE_MATCH_CONFIRMED'; matchId: string }
   | { type: 'LEAGUE_MATCH_EDIT_REQUESTED'; matchId: string }
-  | { type: 'TOURNAMENT_FINISHED'; summaryId: string; now: string } // RF-31, RF-33, RF-55
-  | { type: 'TOURNAMENT_ABANDONED' }                            // RF-44
-  | { type: 'STANDINGS_RESET' };                                // RF-47
+  // Nuevas modalidades v2.0
+  | { type: 'GROUP_STAGE_GENERATED'; groups: GroupData[] }
+  | {
+      type: 'GROUP_MATCH_SCORE_SET';
+      groupId: 'A' | 'B' | 'C';
+      matchId: string;
+      scoreA: number | null;
+      scoreB: number | null;
+      cardsA?: CardCounts;
+      cardsB?: CardCounts;
+    }
+  | { type: 'GROUP_MATCH_CONFIRMED'; groupId: 'A' | 'B' | 'C'; matchId: string }
+  | { type: 'GROUP_PLAYOFFS_STARTED'; playoffSeries: Series[] }
+  | { type: 'LEAGUE_PLAYOFFS_STARTED'; playoffSeries: Series[] }
+  | { type: 'DOUBLE_ELIMINATION_GENERATED'; bracket: DoubleEliminationBracket }
+  | { type: 'DOUBLE_ELIMINATION_MATCH_CONFIRMED'; bracketType: 'winner'|'loser'|'grandFinal'|'grandFinalReset'; seriesId: string }
+  | { type: 'DOUBLE_ELIMINATION_RESET_TRIGGERED' }
+  // Walkover individual
+  | { type: 'PLAYER_WALKOVER_DECLARED'; playerId: PlayerId }
+  // Cierre y gestión
+  | { type: 'TOURNAMENT_FINISHED'; summaryId: string; now: string }
+  | { type: 'TOURNAMENT_ABANDONED' }
+  | { type: 'STANDINGS_RESET' };
 ```
 
-## 5. Persistencia y Robustez
+## 5. Estrategia de Migración y Compatibilidad hacia Atrás
 
-- Compatibilidad hacia atrás: Si un estado cargado no tiene `tournamentType` o `matchFormat`, se asignan valores por defecto (`'bracket'` y `'two_legged'`, `leagueMatches: []`).
-- Borrado seguro: `PLAYER_REMOVED` se rechaza si el jugador está en `activeTournament` en fase `draft`, `bracket` o `league`.
-- Reseteo atómico: `STANDINGS_RESET` vacía `stats: {}` e `history: []` sin tocar los jugadores registrados ni el torneo activo.
+1. **Lectura Segura (`storage.ts`):**
+   Al cargar `loadAppData()`, si el archivo tiene `schemaVersion: 1` o ausente:
+   - Se migra a `schemaVersion: 2`.
+   - Se inicializan campos faltantes: `customThemes: []`, `headToHead: {}`, `annualRankings: {}`.
+   - Si existe un `activeTournament` en curso, se le asigna `walkoverPlayerIds: []` y tarjetas por defecto `{ yellow: 0, red: 0 }` en partidos no calificados.
+2. **Robustez ante Abandono Individual (W.O.):**
+   - El desertor mantiene registro de que jugó el torneo pero todos sus partidos pasan a 0-3.
+   - Si el rival ya había ganado 5-0, se normaliza o prevalece la regla de Walkover según la spec (derrota por 3-0 en contra).
+   - El desempate de tabla se recalcula instantáneamente sin corromper el árbol de cruces.
 
-## 6. Estrategia de Tests (solo `src/domain/`)
+## 6. Estrategia de Tests (Vitest)
 
-- **Runner:** Vitest, `environment: 'node'`. Script: `npm test`.
-- **Casos de prueba para las nuevas funcionalidades:**
-  - `league`:
-    - Generación correcta de Round Robin para 4, 5 y 6 jugadores (número exacto de fechas y partidos, todos juegan contra todos sin repeticiones).
-    - Cálculo de tabla de liga con victorias, empates y derrotas. Desempate por PTS → DG → GF.
-    - Detección de liga completa y podio de los 4 primeros.
-  - `series`:
-    - Validación y cálculo de ganador en modalidad `single_match` (empate exige penales; resultado sin leg2).
-    - Estadísticas de torneo en `single_match` suman solo los goles de `leg1`.
-  - `draft`:
-    - `assignTeamsAutomatically`: rechaza lista incompleta o nombres vacíos/duplicados. Con lista válida, asigna un equipo único a cada participante con Fisher-Yates.
-  - `players`:
-    - Borrado de jugador y limpieza de referencias.
-  - `standings`:
-    - Cierre de torneo en modo Liga calcula correctamente los puntos acumulados para la tabla histórica.
-    - Reseteo de historial devuelve acumulados vacíos.
+- **`fairPlay.test.ts` & `standings.test.ts`:**
+  - Desempate jerárquico estricto: igualdad de puntos y DG resuelta por H2H; si empatan en H2H, por PG; si empatan en PG, por menos TR; luego menos TA; fallback alfabético.
+- **`walkover.test.ts`:**
+  - Declarar walkover en Liga: todos los partidos del jugador se fijan en 0-3 (goles a favor 0, en contra 3), los partidos jugados y no jugados quedan confirmados, recálculo de tabla inmediato.
+  - Declarar walkover en Llaves y Doble Eliminación: pase automático del contrincante.
+- **`groupStage.test.ts`:**
+  - 6 participantes: 2 grupos de 3 con fixture Round Robin (1 o 2 ruedas). Clasificación de 1° y 2° de cada grupo y cruce de Semis (1°A vs 2°B, 1°B vs 2°A).
+  - 9 participantes: 3 grupos de 3. Clasificación de tres 1° y del mejor 2° comparativo por criterios Fair Play.
+- **`leaguePlayoffs.test.ts`:**
+  - Detección de fin de fase regular y corte correcto según N: 4 jugadores (avanzan 2 a final), 6 u 8 (avanzan 4 a semis), 10 (avanzan 8 a cuartos).
+- **`doubleElimination.test.ts`:**
+  - Bracket de ganadores y perdedores para 4 a 10 participantes con Byes.
+  - Flujo de perdedores cayendo a Loser Bracket.
+  - Grand Final: victoria de WB corona campeón; victoria de LB dispara Grand Final Reset.
+- **`scenarios.test.ts`:**
+  - Verificación matemática de clasificados matemáticos asegurados antes de la última fecha.
+  - Generación de mensajes descriptivos para cruces clave.
+- **`awardsAndRankings.test.ts`:**
+  - Acumulación de estadísticas cara a cara (H2H).
+  - Cálculo de Bota de Oro, Madera y Valla Invicta.
+  - Cálculo de puntos anuales ponderados multiplicados por factor de escala $N/4$.
+  - Distribución de puntos del torneo para el Ranking Anual según $N$ (`getTournamentPointsDistribution`).
+- **`scenarios.test.ts` (Fase Q):**
+  - Verificación matemática de participantes sin chances / eliminados (`calculateMathematicalElimination`).
+  - Verificación de borde con empates matemáticos y sin partidos pendientes.
+- **Hotfixes Fase R:**
+  - **`awardsAndRankings.test.ts`:** Verificación de enteros estrictos (`Math.round`) en `getTournamentPointsDistribution` y `computeAnnualRanking` para todos los $N \in [4, 10]$. Verificación de acumulación de TR, TA y podios en estadísticas y ranking anual.
+  - **`scenarios.test.ts`:** Verificación de que `getMatchScenarioGuidance` retorna estrictamente "Eliminado matemáticamente" o "Sin chances" para jugadores sin posibilidades matemáticas.
+  - **`bracket.test.ts` & `doubleElimination.test.ts`:** Verificación de generación de cruces con orden manual de participantes y asignación explícita de Byes sin duplicados.
+
+## 7. Decisiones de Diseño — Fase R (Hotfixes)
+
+- **D32 (Puntos estrictamente enteros):** Para evitar inconsistencias visuales o decimales extraños en torneos con cantidades de jugadores donde $N/4$ tiene decimales (ej. $N=5, 6, 7, 9, 10$), `getTournamentPointsDistribution` y `computeAnnualRanking` aplicarán `Math.round(...)` a cada puesto de la distribución ($10 \times N/4$, $7 \times N/4$, etc.).
+- **D33 (Mensaje estricto para eliminados en escenarios):** En `scenarios.ts`, antes de calcular posibilidades de empate o victoria, se verifica si el jugador ya está eliminado matemáticamente. Si es así, se asigna el mensaje exacto `"Eliminado matemáticamente"` o `"Sin chances"` en lugar de sugerencias de suma de puntos inalcanzables.
+- **D34 (Tracking de Fair Play y Podios en historial):** Se extienden `PlayerStats` y `AnnualRankingEntry` con campos opcionales `yellowCards`, `redCards` y `podiums`. En `TOURNAMENT_FINISHED`, se consolidan las tarjetas de todos los partidos jugados y se incrementa el contador de podios para los jugadores que finalizaron 1º (Campeón), 2º (Subcampeón) y 3º (Tercer puesto). En `StandingsView`, se agregan columnas para visualizar estas métricas en ambas tablas.
+- **D35 (Selector de Clasificados y Sorteo de Formato en Registro):** En `RegistrationView`, para "Liga + Reducido", se añade un selector de cupos a playoffs (2, 4 u 8 clasificados, respetando $N$), guardado en el estado del torneo activo. Junto a la botonera de formatos, se añade un botón "Sortear Formato" con efecto aleatorio que selecciona una modalidad compatible con el número de jugadores elegidos.
+- **D36 (Armado manual de cruces y Byes):** En `BracketView` y `DoubleEliminationView`, mientras no se haya disputado ningún partido (`series.every(s => !s.confirmed && s.leg1.a === null)`), se disponibiliza un panel de configuración manual de cruces. El administrador puede seleccionar mediante dropdowns qué jugadores se enfrentan en cada cruce de primera ronda y quiénes obtienen Byes. La acción (`BRACKET_MATCHUPS_MANUALLY_SET` / `DOUBLE_ELIMINATION_MATCHUPS_MANUALLY_SET`) regenera la estructura respetando el orden manual sin romper el árbol de eliminatorias.
+

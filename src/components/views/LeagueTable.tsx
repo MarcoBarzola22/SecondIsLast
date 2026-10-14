@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, Shield, Trophy, XCircle } from 'lucide-react';
-import type { LeagueStandingRow, PlayerId } from '../../domain/types';
+import type { LeagueStandingRow, PlayerId, TournamentType } from '../../domain/types';
+import { useAppState } from '../../state/AppContext';
 
 interface LeagueTableProps {
   standings: LeagueStandingRow[];
@@ -9,20 +10,30 @@ interface LeagueTableProps {
   mathematicallyEliminatedIds?: Record<PlayerId, boolean> | Set<PlayerId>;
   qualificationLegend?: string;
   isGroupTable?: boolean;
+  tournamentType?: TournamentType;
 }
 
 export function LeagueTable({
   standings,
   walkoverPlayerIds,
-  qualifyingCutoff,
+  qualifyingCutoff: propQualifyingCutoff,
   mathematicallyQualifiedIds,
   mathematicallyEliminatedIds,
   qualificationLegend,
   isGroupTable,
+  tournamentType: propTournamentType,
 }: LeagueTableProps) {
+  const { activeTournament } = useAppState();
+  const tournamentType = propTournamentType ?? activeTournament?.tournamentType;
+  const isLeague = tournamentType === 'league';
+
+  const qualifyingCutoff = isLeague ? 1 : propQualifyingCutoff;
+
   const legendText =
     qualificationLegend ??
-    (isGroupTable
+    (isLeague
+      ? 'El 1º se consagra Campeón'
+      : isGroupTable
       ? qualifyingCutoff === 2
         ? '1° y 2° de cada grupo clasifican a Semifinales'
         : 'El 1° de cada grupo clasifica directo a Semifinales'
@@ -41,7 +52,7 @@ export function LeagueTable({
             <span className="inline-block h-2 w-2 rounded-full bg-emerald-400"></span>
             <span className="font-semibold text-foreground">{legendText}</span>
           </div>
-          {qualifyingCutoff !== undefined && (
+          {!isLeague && qualifyingCutoff !== undefined && (
             <span className="font-mono text-[11px] font-bold text-emerald-400">
               Cupos: {qualifyingCutoff}
             </span>
@@ -151,7 +162,7 @@ export function LeagueTable({
                       {isMathQualified && !isWalkover && (
                         <span className="inline-flex items-center gap-1 rounded-sm border border-emerald-500/80 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-emerald-300 shadow-[0_0_8px_rgba(74,222,128,0.25)]">
                           <CheckCircle2 className="h-3 w-3 text-emerald-400 shrink-0" />
-                          Clasificado
+                          {isLeague ? 'Campeón' : 'Clasificado'}
                         </span>
                       )}
 
@@ -166,7 +177,9 @@ export function LeagueTable({
                       {/* En zona de clasificación previa al cálculo matemático definitivo */}
                       {!isMathQualified && !isMathEliminated && isQualified && !isWalkover && (
                         <span className="rounded-sm border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.2 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-                          {isGroupTable
+                          {isLeague
+                            ? 'Campeón'
+                            : isGroupTable
                             ? 'Semifinales'
                             : qualifyingCutoff !== undefined && qualifyingCutoff <= 2
                             ? 'Final'

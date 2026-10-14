@@ -63,21 +63,20 @@ export function LeagueView({ onTournamentFinished }: LeagueViewProps) {
   const isTwoLegged = matchFormat === 'two_legged';
   const matches = leagueMatches ?? [];
 
+  const isLeagueFormat = tournamentType === 'league';
   const isLeaguePlayoffsFormat = tournamentType === 'league_playoffs';
   const isPlayoffsPhase = phase === 'league_playoffs';
-  const cutoffCount = isLeaguePlayoffsFormat
+  const cutoffCount = isLeagueFormat
+    ? 1
+    : isLeaguePlayoffsFormat
     ? activeTournament.qualifyingSpots ?? getPlayoffsCutoffCount(participantIds.length)
-    : 0;
+    : 1;
 
-  const qualifyingCutoff = isLeaguePlayoffsFormat
+  const qualifyingCutoff = isLeagueFormat
+    ? 1
+    : isLeaguePlayoffsFormat
     ? cutoffCount
-    : activeTournament.qualifyingSpots !== undefined
-    ? activeTournament.qualifyingSpots
-    : participantIds.length <= 4
-    ? 2
-    : participantIds.length >= 10
-    ? 8
-    : 4;
+    : 1;
 
   const playersMap = useMemo(
     () => new Map(players.map((p) => [p.id, p])),
@@ -336,6 +335,7 @@ export function LeagueView({ onTournamentFinished }: LeagueViewProps) {
                 ? 'Los primeros 2 clasificaron a la Final directa'
                 : `Los primeros ${cutoffCount} clasificaron al Reducido eliminatorio`
             }
+            tournamentType={tournamentType}
           />
         </Panel>
       </div>
@@ -369,14 +369,15 @@ export function LeagueView({ onTournamentFinished }: LeagueViewProps) {
           mathematicallyQualifiedIds={mathematicallyQualified}
           mathematicallyEliminatedIds={mathematicallyEliminated}
           qualificationLegend={
-            isLeaguePlayoffsFormat
+            isLeagueFormat
+              ? 'El 1º se consagra Campeón'
+              : isLeaguePlayoffsFormat
               ? cutoffCount === 2
                 ? 'Los primeros 2 clasifican a la Final'
                 : `Los primeros ${cutoffCount} clasifican al Reducido`
-              : qualifyingCutoff === 2
-                ? 'Los primeros 2 clasifican a la Final'
-                : 'Los primeros 4 definen los puestos de podio'
+              : 'El 1º se consagra Campeón'
           }
+          tournamentType={tournamentType}
         />
       </Panel>
 

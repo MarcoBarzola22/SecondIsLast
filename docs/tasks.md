@@ -190,6 +190,8 @@
   - Cubre: RF-86, RF-68.
 - [x] **T67 · Hotfix Visual: Indicador dinámico de cupos y resaltado verde de clasificados en Liga + Reducido** — En `LeagueView.tsx` y `LeagueTable.tsx`, leer el valor real de `qualifyingSpots` desde `activeTournament.qualifyingSpots` sin redondeos ni fallbacks estáticos. Mostrar los textos dinámicos "Los primeros {qualifyingSpots} clasifican al Reducido" y "Cupos: {qualifyingSpots}". Pintar exactamente las primeras `qualifyingSpots` filas con el estilo verde de clasificación y badge "Reducido".
   - Cubre: RF-83, RF-86.
+- [x] **T69 · Hotfix Conceptual: Diferenciación estricta entre Liga regular y Liga + Reducido** — En `LeagueView.tsx` y `LeagueTable.tsx`, forzar `qualifyingSpots` / `cutoffCount` a 1 cuando `tournamentType === 'league'`, cambiando la leyenda a "El 1º se consagra Campeón" (ocultando badge de cupos), pasando 1 a las funciones de `scenarios.ts` y resaltando únicamente al 1º puesto con badge "Campeón".
+  - Cubre: RF-53, RF-83.
 
 
 

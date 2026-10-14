@@ -16,7 +16,7 @@ import {
   extractParticipantOrderFromSeries,
 } from '../../domain/bracket';
 import { shuffle } from '../../domain/random';
-import type { PlayerId } from '../../domain/types';
+import type { ActiveTournament, PlayerId } from '../../domain/types';
 
 interface ManualMatchupsPanelProps {
   mode: 'bracket' | 'double_elimination';
@@ -27,27 +27,53 @@ export function ManualMatchupsPanel({
   mode,
   className = '',
 }: ManualMatchupsPanelProps) {
-  const { activeTournament, players } = useAppState();
+  const { activeTournament } = useAppState();
+
+  if (!activeTournament) return null;
+
+  const { series } = activeTournament;
+
+  // Only allowed if no match has started or confirmed (RF-87, D36)
+  const canEditMatchups =
+    series.length > 0 &&
+    series.every(
+      (s) =>
+        !s.confirmed &&
+        s.leg1.a === null &&
+        s.leg1.b === null &&
+        s.leg2.a === null &&
+        s.leg2.b === null
+    );
+
+  if (!canEditMatchups) return null;
+
+  return (
+    <ManualMatchupsContent
+      tournament={activeTournament}
+      mode={mode}
+      className={className}
+    />
+  );
+}
+
+interface ManualMatchupsContentProps {
+  tournament: ActiveTournament;
+  mode: 'bracket' | 'double_elimination';
+  className?: string;
+}
+
+function ManualMatchupsContent({
+  tournament,
+  mode,
+  className = '',
+}: ManualMatchupsContentProps) {
+  const { players } = useAppState();
   const dispatch = useAppDispatch();
   const [isOpen, setIsOpen] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  if (!activeTournament) return null;
-
-  const { participantIds, teams, series, bracketOrder } = activeTournament;
+  const { participantIds, teams, series, bracketOrder } = tournament;
   const count = participantIds.length;
-
-  // Only allowed if no match has started or confirmed (RF-87, D36)
-  const canEditMatchups = series.every(
-    (s) =>
-      !s.confirmed &&
-      s.leg1.a === null &&
-      s.leg1.b === null &&
-      s.leg2.a === null &&
-      s.leg2.b === null
-  );
-
-  if (!canEditMatchups) return null;
 
   const slotGroups = useMemo(() => getMatchupSlotGroups(count), [count]);
   const playersMap = useMemo(

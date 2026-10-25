@@ -35,7 +35,8 @@ export function createDoubleEliminationSeries(
   playerA: PlayerId | null,
   playerB: PlayerId | null,
   winnerTo: SlotTarget | null,
-  loserTo: SlotTarget | null
+  loserTo: SlotTarget | null,
+  isBye: boolean = false
 ): Series {
   return {
     id,
@@ -45,10 +46,12 @@ export function createDoubleEliminationSeries(
     leg1: { a: null, b: null },
     leg2: { a: null, b: null },
     penaltyWinner: null,
-    confirmed: false,
+    confirmed: isBye,
+    status: isBye ? 'CLOSED' : 'PENDING_SUBMISSION',
+    isBye,
     winnerTo,
     loserTo,
-    winner: null,
+    winner: isBye ? playerA : null,
     loser: null,
   };
 }

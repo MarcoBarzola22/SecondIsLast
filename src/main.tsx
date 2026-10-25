@@ -4,6 +4,8 @@ import './index.css';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppProvider } from './state/AppContext';
+import { AuthProvider } from './context/AuthContext';
+import { SocketProvider } from './context/SocketContext';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -14,7 +16,11 @@ createRoot(rootElement).render(
   <StrictMode>
     <ErrorBoundary>
       <AppProvider>
-        <App />
+        <AuthProvider>
+          <SocketProvider>
+            <App />
+          </SocketProvider>
+        </AuthProvider>
       </AppProvider>
     </ErrorBoundary>
   </StrictMode>

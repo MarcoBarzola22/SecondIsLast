@@ -1,0 +1,219 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  PLAYER
+}
+
+enum TournamentStatus {
+  LOBBY
+  VOTING_FORMAT
+  VOTING_THEME
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
+enum TournamentFormat {
+  BRACKET
+  LEAGUE
+  GROUP_STAGE
+  LEAGUE_PLAYOFFS
+  DOUBLE_ELIMINATION
+}
+
+enum MatchFormat {
+  SINGLE_MATCH
+  TWO_LEGGED
+}
+
+enum MatchStatus {
+  PENDING_SUBMISSION
+  PENDING_CONFIRMATION
+  CLOSED
+}
+
+enum VotePhase {
+  FORMAT
+  THEME
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  googleId  String   @unique
+  role      Role     @default(PLAYER)
+  playerId  String?  @unique
+  player    Player?  @relation(fields: [playerId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WhitelistEntry {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  role      Role     @default(PLAYER)
+  playerId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Player {
+  id             String                  @id @default(uuid())
+  firstName      String
+  lastName       String
+  user           User?
+  participants   TournamentParticipant[]
+  h2hAsPlayerA   HeadToHeadRecord[]      @relation("PlayerA")
+  h2hAsPlayerB   HeadToHeadRecord[]      @relation("PlayerB")
+  annualRankings AnnualRankingEntry[]
+  stats          HistoricalStats?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@unique([firstName, lastName])
+}
+
+model Tournament {
+  id               String                  @id @default(uuid())
+  name             String
+  status           TournamentStatus        @default(LOBBY)
+  format           TournamentFormat?
+  matchFormat      MatchFormat?
+  theme            String?
+  participantCount Int                     @default(0)
+  currentRound     Int                     @default(1)
+  settings         Json?
+  winnerId         String?
+  participants     TournamentParticipant[]
+  matches          Match[]
+  votes            TournamentVote[]
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+}
+
+model TournamentParticipant {
+  id           String      @id @default(uuid())
+  tournamentId String
+  tournament   Tournament  @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  playerId     String
+  player       Player      @relation(fields: [playerId], references: [id])
+  teamName     String?
+  seed         Int?
+  isPresent    Boolean     @default(true)
+  isWalkover   Boolean     @default(false)
+  walkoverAt   DateTime?
+  homeMatches  Match[]     @relation("HomeParticipant")
+  awayMatches  Match[]     @relation("AwayParticipant")
+  penaltiesWon Match[]     @relation("PenaltiesWinner")
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@unique([tournamentId, playerId])
+}
+
+model Match {
+  id                          String                 @id @default(uuid())
+  tournamentId                String
+  tournament                  Tournament             @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  round                       Int
+  leg                         Int                    @default(1) // 1 = Ida / Partido Único, 2 = Vuelta
+  seriesId                    String?                // Agrupa partidos de la misma serie en Ida y Vuelta
+  homeParticipantId           String
+  homeParticipant             TournamentParticipant  @relation("HomeParticipant", fields: [homeParticipantId], references: [id])
+  awayParticipantId           String?
+  awayParticipant             TournamentParticipant? @relation("AwayParticipant", fields: [awayParticipantId], references: [id])
+  status                      MatchStatus            @default(PENDING_SUBMISSION)
+  isBye                       Boolean                @default(false)
+  
+  // Marcadores y Fair Play
+  homeScore                   Int?
+  awayScore                   Int?
+  homeYellowCards             Int                    @default(0)
+  awayYellowCards             Int                    @default(0)
+  homeRedCards                Int                    @default(0)
+  awayRedCards                Int                    @default(0)
+  penaltiesWinnerId           String?
+  penaltiesWinner             TournamentParticipant?  @relation("PenaltiesWinner", fields: [penaltiesWinnerId], references: [id])
+  
+  // Control de Concurrencia Optimista (OCC)
+  version                     Int                    @default(1)
+  submittedByParticipantId    String?
+  submittedAt                 DateTime?
+  closedAt                    DateTime?
+  createdAt                   DateTime               @default(now())
+  updatedAt                   DateTime               @updatedAt
+
+  @@index([tournamentId, round])
+}
+
+model TournamentVote {
+  id            String     @id @default(uuid())
+  tournamentId  String
+  tournament    Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  participantId String
+  phase         VotePhase
+  choice        String
+  createdAt     DateTime   @default(now())
+
+  @@unique([tournamentId, participantId, phase])
+}
+
+model HistoricalStats {
+  id            String   @id @default(uuid())
+  playerId      String   @unique
+  player        Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  matchesPlayed Int      @default(0)
+  matchesWon    Int      @default(0)
+  matchesDrawn  Int      @default(0)
+  matchesLost   Int      @default(0)
+  goalsFor      Int      @default(0)
+  goalsAgainst  Int      @default(0)
+  yellowCards   Int      @default(0)
+  redCards      Int      @default(0)
+  podiums       Int      @default(0)
+  firstPlaces   Int      @default(0)
+  secondPlaces  Int      @default(0)
+  thirdPlaces   Int      @default(0)
+  updatedAt     DateTime @updatedAt
+}
+
+model HeadToHeadRecord {
+  id            String   @id @default(uuid())
+  playerAId     String
+  playerA       Player   @relation("PlayerA", fields: [playerAId], references: [id], onDelete: Cascade)
+  playerBId     String
+  playerB       Player   @relation("PlayerB", fields: [playerBId], references: [id], onDelete: Cascade)
+  matchesPlayed Int      @default(0)
+  winsA         Int      @default(0)
+  winsB         Int      @default(0)
+  draws         Int      @default(0)
+  goalsA        Int      @default(0)
+  goalsB        Int      @default(0)
+  updatedAt     DateTime @updatedAt
+
+  @@unique([playerAId, playerBId])
+}
+
+model AnnualRankingEntry {
+  id                String   @id @default(uuid())
+  year              Int
+  playerId          String
+  player            Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  points            Int      @default(0)
+  tournamentsPlayed Int      @default(0)
+  podiums           Int      @default(0)
+  yellowCards       Int      @default(0)
+  redCards          Int      @default(0)
+  updatedAt         DateTime @updatedAt
+
+  @@unique([year, playerId])
+}

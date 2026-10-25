@@ -1,4 +1,14 @@
-import { Trophy, CheckCircle, RotateCcw, AlertTriangle } from 'lucide-react';
+import { useState } from 'react';
+import {
+  Trophy,
+  CheckCircle,
+  RotateCcw,
+  AlertTriangle,
+  Hourglass,
+  Send,
+  Loader2,
+  Lock,
+} from 'lucide-react';
 import {
   canEditSeries,
   getSeriesResult,
@@ -6,7 +16,9 @@ import {
 } from '../../domain/series';
 import type { CardCounts, PlayerId, Series, Side } from '../../domain/types';
 import { useAppDispatch, useAppState } from '../../state/AppContext';
+import { useAuth } from '../../context/AuthContext';
 import { PrimaryButton, SecondaryButton } from '../ui/Buttons';
+import { HandshakeModal, type HandshakeMatchData } from './HandshakeModal';
 
 interface SeriesCardProps {
   series: Series;
@@ -16,6 +28,12 @@ interface SeriesCardProps {
 export function SeriesCard({ series, label }: SeriesCardProps) {
   const { activeTournament, players } = useAppState();
   const dispatch = useAppDispatch();
+  const { user } = useAuth();
+  const currentUserId = user?.playerId;
+
+  const [handshakeMatchData, setHandshakeMatchData] = useState<HandshakeMatchData | null>(null);
+  const [isSubmittingProposal, setIsSubmittingProposal] = useState<boolean>(false);
+  const [proposalError, setProposalError] = useState<string | null>(null);
 
   if (!activeTournament) return null;
 
@@ -49,12 +67,87 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
   const isWinnerA = series.confirmed && result.winner === series.playerA;
   const isWinnerB = series.confirmed && result.winner === series.playerB;
 
+  // Find associated matches in activeTournament.matches if present
+  const seriesMatches = activeTournament.matches?.filter(
+    (m: any) => m.seriesId === series.id || m.id === series.id
+  ) ?? [];
+  const targetMatchLeg1 = seriesMatches.find((m: any) => m.leg === 1) || seriesMatches[0];
+  const targetMatchLeg2 = seriesMatches.find((m: any) => m.leg === 2);
+
+  // Status and version for Single Match
+  const singleMatchStatus =
+    targetMatchLeg1?.status || series.status || (series.confirmed ? 'CLOSED' : 'PENDING_SUBMISSION');
+  const singleMatchVersion = targetMatchLeg1?.version ?? series.version ?? 1;
+
+  // Status and version for Two-Legged
+  const leg1Status =
+    targetMatchLeg1?.status ||
+    (series.leg1.a !== null && series.leg1.b !== null && !series.confirmed
+      ? 'PENDING_CONFIRMATION'
+      : series.confirmed
+        ? 'CLOSED'
+        : 'PENDING_SUBMISSION');
+  const leg1Version = targetMatchLeg1?.version ?? 1;
+
+  const leg2Status =
+    targetMatchLeg2?.status ||
+    (series.leg2.a !== null && series.leg2.b !== null && !series.confirmed
+      ? 'PENDING_CONFIRMATION'
+      : series.confirmed
+        ? 'CLOSED'
+        : 'PENDING_SUBMISSION');
+  const leg2Version = targetMatchLeg2?.version ?? 1;
+
+  // Local/Away roles
+  // In single match: playerA is Local, playerB is Away
+  const isLocalSingle = currentUserId ? currentUserId === series.playerA : true;
+  const isAwaySingle = currentUserId ? currentUserId === series.playerB : false;
+
+  // In two-legged:
+  // Leg 1: playerA is Local, playerB is Away
+  const isLocalLeg1 = currentUserId ? currentUserId === series.playerA : true;
+  const isAwayLeg1 = currentUserId ? currentUserId === series.playerB : false;
+
+  // Leg 2: playerB is Local, playerA is Away
+  const isLocalLeg2 = currentUserId ? currentUserId === series.playerB : true;
+  const isAwayLeg2 = currentUserId ? currentUserId === series.playerA : false;
+
+  // Sequential locking between Leg 1 and Leg 2 (RF-114)
+  const isLeg2SequentiallyLocked = !isSingleMatch && (leg1Status !== 'CLOSED');
+
+  // Editing permissions (RF-106, RF-114)
+  const canEditLeg1 =
+    !series.confirmed &&
+    !isWalkoverSeries &&
+    (currentUserId
+      ? isLocalLeg1 && (isSingleMatch ? singleMatchStatus === 'PENDING_SUBMISSION' : leg1Status === 'PENDING_SUBMISSION')
+      : true);
+
+  const canEditLeg2 =
+    !series.confirmed &&
+    !isWalkoverSeries &&
+    !isLeg2SequentiallyLocked &&
+    (currentUserId ? isLocalLeg2 && leg2Status === 'PENDING_SUBMISSION' : true);
+
+  // Penalties: enabled if Local of the tiebreaking match (RF-106)
+  const canSelectPenalties =
+    !series.confirmed &&
+    !isWalkoverSeries &&
+    !isLeg2SequentiallyLocked &&
+    (currentUserId
+      ? isSingleMatch
+        ? isLocalSingle && singleMatchStatus === 'PENDING_SUBMISSION'
+        : isLocalLeg2 && leg2Status === 'PENDING_SUBMISSION'
+      : true);
+
   const handleScoreChange = (
     leg: 'leg1' | 'leg2',
     side: Side,
     valueStr: string
   ) => {
-    if (series.confirmed || isWalkoverSeries) return;
+    const canEdit = leg === 'leg1' ? canEditLeg1 : canEditLeg2;
+    if (!canEdit) return;
+
     const existingCards = side === 'a' ? series[leg].cardsA : series[leg].cardsB;
     const trimmed = valueStr.trim();
     if (trimmed === '') {
@@ -88,7 +181,9 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
     cardType: 'yellow' | 'red',
     valueStr: string
   ) => {
-    if (series.confirmed || isWalkoverSeries) return;
+    const canEdit = leg === 'leg1' ? canEditLeg1 : canEditLeg2;
+    if (!canEdit) return;
+
     const currentCards =
       (side === 'a' ? series[leg].cardsA : series[leg].cardsB) ?? {
         yellow: 0,
@@ -129,7 +224,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
   };
 
   const handlePenaltyChange = (winnerId: PlayerId | null) => {
-    if (isWalkoverSeries) return;
+    if (!canSelectPenalties) return;
     dispatch({
       type: 'PENALTY_WINNER_SET',
       seriesId: series.id,
@@ -145,6 +240,178 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
   const handleReopen = () => {
     if (!editable || isWalkoverSeries) return;
     dispatch({ type: 'SERIES_EDIT_REQUESTED', seriesId: series.id });
+  };
+
+  const handleSubmitSingleMatch = async () => {
+    if (series.leg1.a === null || series.leg1.b === null || series.confirmed || isWalkoverSeries) return;
+    if (result.isTied && !series.penaltyWinner) {
+      setProposalError('En caso de empate, tenés que indicar quién ganó por penales antes de enviar.');
+      return;
+    }
+    setIsSubmittingProposal(true);
+    setProposalError(null);
+    try {
+      const matchId = targetMatchLeg1?.id || series.id;
+      const res = await fetch(`/api/matches/${matchId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          homeScore: series.leg1.a,
+          awayScore: series.leg1.b,
+          homeYellowCards: series.leg1.cardsA?.yellow ?? 0,
+          awayYellowCards: series.leg1.cardsB?.yellow ?? 0,
+          homeRedCards: series.leg1.cardsA?.red ?? 0,
+          awayRedCards: series.leg1.cardsB?.red ?? 0,
+          penaltiesWinnerId: series.penaltyWinner ?? null,
+          expectedVersion: singleMatchVersion,
+        }),
+      });
+
+      if (!res.ok) {
+        if (res.status === 404) {
+          handleConfirm();
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Error al enviar propuesta al rival.');
+      }
+    } catch (err: any) {
+      setProposalError(err.message || 'Error de conexión.');
+    } finally {
+      setIsSubmittingProposal(false);
+    }
+  };
+
+  const handleSubmitLeg = async (leg: 'leg1' | 'leg2') => {
+    const isLeg1 = leg === 'leg1';
+    const scoreHome = isLeg1 ? series.leg1.a : series.leg2.b;
+    const scoreAway = isLeg1 ? series.leg1.b : series.leg2.a;
+    const cardsHome = isLeg1 ? series.leg1.cardsA : series.leg2.cardsB;
+    const cardsAway = isLeg1 ? series.leg1.cardsB : series.leg2.cardsA;
+    const targetMatch = isLeg1 ? targetMatchLeg1 : targetMatchLeg2;
+    const expectedVer = isLeg1 ? leg1Version : leg2Version;
+
+    if (scoreHome === null || scoreAway === null) return;
+    if (!isLeg1 && result.isTied && !series.penaltyWinner) {
+      setProposalError('En caso de empate global, tenés que indicar quién ganó por penales antes de enviar.');
+      return;
+    }
+
+    setIsSubmittingProposal(true);
+    setProposalError(null);
+    try {
+      const matchId = targetMatch?.id || `${series.id}_${leg}`;
+      const res = await fetch(`/api/matches/${matchId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          homeScore: scoreHome,
+          awayScore: scoreAway,
+          homeYellowCards: cardsHome?.yellow ?? 0,
+          awayYellowCards: cardsAway?.yellow ?? 0,
+          homeRedCards: cardsHome?.red ?? 0,
+          awayRedCards: cardsAway?.red ?? 0,
+          penaltiesWinnerId: !isLeg1 ? (series.penaltyWinner ?? null) : null,
+          expectedVersion: expectedVer,
+        }),
+      });
+
+      if (!res.ok) {
+        if (res.status === 404) {
+          if (!isLeg1 && result.canConfirm) {
+            handleConfirm();
+          }
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Error al enviar partido de ${isLeg1 ? 'ida' : 'vuelta'}.`);
+      }
+    } catch (err: any) {
+      setProposalError(err.message || 'Error de conexión.');
+    } finally {
+      setIsSubmittingProposal(false);
+    }
+  };
+
+  const openSingleMatchReview = () => {
+    setHandshakeMatchData({
+      id: targetMatchLeg1?.id || series.id,
+      seriesId: series.id,
+      homePlayerId: series.playerA!,
+      awayPlayerId: series.playerB!,
+      homePlayerName: nameA,
+      homeTeamName: teamA,
+      awayPlayerName: nameB,
+      awayTeamName: teamB,
+      homeScore: series.leg1.a ?? 0,
+      awayScore: series.leg1.b ?? 0,
+      homeYellowCards: series.leg1.cardsA?.yellow ?? 0,
+      awayYellowCards: series.leg1.cardsB?.yellow ?? 0,
+      homeRedCards: series.leg1.cardsA?.red ?? 0,
+      awayRedCards: series.leg1.cardsB?.red ?? 0,
+      penaltiesWinnerId: series.penaltyWinner ?? null,
+      penaltiesWinnerName:
+        series.penaltyWinner === series.playerA
+          ? nameA
+          : series.penaltyWinner === series.playerB
+            ? nameB
+            : null,
+      version: singleMatchVersion,
+      status: singleMatchStatus,
+    });
+  };
+
+  const openLeg1Review = () => {
+    setHandshakeMatchData({
+      id: targetMatchLeg1?.id || `${series.id}_leg1`,
+      seriesId: series.id,
+      leg: 1,
+      homePlayerId: series.playerA!,
+      awayPlayerId: series.playerB!,
+      homePlayerName: nameA,
+      homeTeamName: teamA,
+      awayPlayerName: nameB,
+      awayTeamName: teamB,
+      homeScore: series.leg1.a ?? 0,
+      awayScore: series.leg1.b ?? 0,
+      homeYellowCards: series.leg1.cardsA?.yellow ?? 0,
+      awayYellowCards: series.leg1.cardsB?.yellow ?? 0,
+      homeRedCards: series.leg1.cardsA?.red ?? 0,
+      awayRedCards: series.leg1.cardsB?.red ?? 0,
+      version: leg1Version,
+      status: leg1Status,
+    });
+  };
+
+  const openLeg2Review = () => {
+    setHandshakeMatchData({
+      id: targetMatchLeg2?.id || `${series.id}_leg2`,
+      seriesId: series.id,
+      leg: 2,
+      homePlayerId: series.playerB!,
+      awayPlayerId: series.playerA!,
+      homePlayerName: nameB,
+      homeTeamName: teamB,
+      awayPlayerName: nameA,
+      awayTeamName: teamA,
+      homeScore: series.leg2.b ?? 0,
+      awayScore: series.leg2.a ?? 0,
+      homeYellowCards: series.leg2.cardsB?.yellow ?? 0,
+      awayYellowCards: series.leg2.cardsA?.yellow ?? 0,
+      homeRedCards: series.leg2.cardsB?.red ?? 0,
+      awayRedCards: series.leg2.cardsA?.red ?? 0,
+      penaltiesWinnerId: series.penaltyWinner ?? null,
+      penaltiesWinnerName:
+        series.penaltyWinner === series.playerA
+          ? nameA
+          : series.penaltyWinner === series.playerB
+            ? nameB
+            : null,
+      version: leg2Version,
+      status: leg2Status,
+    });
   };
 
   const renderSideHeader = (
@@ -242,7 +509,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                       type="number"
                       min={0}
                       max={99}
-                      disabled={series.confirmed || isWalkoverSeries}
+                      disabled={!canEditLeg1}
                       value={series.leg1.a ?? ''}
                       onChange={(e) =>
                         handleScoreChange('leg1', 'a', e.target.value)
@@ -256,7 +523,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                       type="number"
                       min={0}
                       max={99}
-                      disabled={series.confirmed || isWalkoverSeries}
+                      disabled={!canEditLeg1}
                       value={series.leg1.b ?? ''}
                       onChange={(e) =>
                         handleScoreChange('leg1', 'b', e.target.value)
@@ -278,7 +545,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                         type="number"
                         min={0}
                         max={99}
-                        disabled={series.confirmed || isWalkoverSeries}
+                        disabled={!canEditLeg1}
                         value={series.leg1.cardsA?.yellow ?? ''}
                         onChange={(e) => handleCardChange('leg1', 'a', 'yellow', e.target.value)}
                         placeholder="0"
@@ -291,7 +558,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                         type="number"
                         min={0}
                         max={99}
-                        disabled={series.confirmed || isWalkoverSeries}
+                        disabled={!canEditLeg1}
                         value={series.leg1.cardsA?.red ?? ''}
                         onChange={(e) => handleCardChange('leg1', 'a', 'red', e.target.value)}
                         placeholder="0"
@@ -312,7 +579,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                         type="number"
                         min={0}
                         max={99}
-                        disabled={series.confirmed || isWalkoverSeries}
+                        disabled={!canEditLeg1}
                         value={series.leg1.cardsB?.yellow ?? ''}
                         onChange={(e) => handleCardChange('leg1', 'b', 'yellow', e.target.value)}
                         placeholder="0"
@@ -325,7 +592,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                         type="number"
                         min={0}
                         max={99}
-                        disabled={series.confirmed || isWalkoverSeries}
+                        disabled={!canEditLeg1}
                         value={series.leg1.cardsB?.red ?? ''}
                         onChange={(e) => handleCardChange('leg1', 'b', 'red', e.target.value)}
                         placeholder="0"
@@ -353,7 +620,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                         type="number"
                         min={0}
                         max={99}
-                        disabled={series.confirmed || isWalkoverSeries}
+                        disabled={!canEditLeg1}
                         value={series.leg1.a ?? ''}
                         onChange={(e) =>
                           handleScoreChange('leg1', 'a', e.target.value)
@@ -367,7 +634,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                         type="number"
                         min={0}
                         max={99}
-                        disabled={series.confirmed || isWalkoverSeries}
+                        disabled={!canEditLeg1}
                         value={series.leg1.b ?? ''}
                         onChange={(e) =>
                           handleScoreChange('leg1', 'b', e.target.value)
@@ -388,7 +655,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                             type="number"
                             min={0}
                             max={99}
-                            disabled={series.confirmed || isWalkoverSeries}
+                            disabled={!canEditLeg1}
                             value={series.leg1.cardsA?.yellow ?? ''}
                             onChange={(e) => handleCardChange('leg1', 'a', 'yellow', e.target.value)}
                             placeholder="0"
@@ -401,7 +668,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                             type="number"
                             min={0}
                             max={99}
-                            disabled={series.confirmed || isWalkoverSeries}
+                            disabled={!canEditLeg1}
                             value={series.leg1.cardsA?.red ?? ''}
                             onChange={(e) => handleCardChange('leg1', 'a', 'red', e.target.value)}
                             placeholder="0"
@@ -418,7 +685,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                             type="number"
                             min={0}
                             max={99}
-                            disabled={series.confirmed || isWalkoverSeries}
+                            disabled={!canEditLeg1}
                             value={series.leg1.cardsB?.yellow ?? ''}
                             onChange={(e) => handleCardChange('leg1', 'b', 'yellow', e.target.value)}
                             placeholder="0"
@@ -431,7 +698,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                             type="number"
                             min={0}
                             max={99}
-                            disabled={series.confirmed || isWalkoverSeries}
+                            disabled={!canEditLeg1}
                             value={series.leg1.cardsB?.red ?? ''}
                             onChange={(e) => handleCardChange('leg1', 'b', 'red', e.target.value)}
                             placeholder="0"
@@ -449,7 +716,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                         type="number"
                         min={0}
                         max={99}
-                        disabled={series.confirmed || isWalkoverSeries}
+                        disabled={!canEditLeg2}
                         value={series.leg2.b ?? ''}
                         onChange={(e) =>
                           handleScoreChange('leg2', 'b', e.target.value)
@@ -463,7 +730,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                         type="number"
                         min={0}
                         max={99}
-                        disabled={series.confirmed || isWalkoverSeries}
+                        disabled={!canEditLeg2}
                         value={series.leg2.a ?? ''}
                         onChange={(e) =>
                           handleScoreChange('leg2', 'a', e.target.value)
@@ -484,7 +751,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                             type="number"
                             min={0}
                             max={99}
-                            disabled={series.confirmed || isWalkoverSeries}
+                            disabled={!canEditLeg2}
                             value={series.leg2.cardsB?.yellow ?? ''}
                             onChange={(e) => handleCardChange('leg2', 'b', 'yellow', e.target.value)}
                             placeholder="0"
@@ -497,7 +764,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                             type="number"
                             min={0}
                             max={99}
-                            disabled={series.confirmed || isWalkoverSeries}
+                            disabled={!canEditLeg2}
                             value={series.leg2.cardsB?.red ?? ''}
                             onChange={(e) => handleCardChange('leg2', 'b', 'red', e.target.value)}
                             placeholder="0"
@@ -514,7 +781,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                             type="number"
                             min={0}
                             max={99}
-                            disabled={series.confirmed || isWalkoverSeries}
+                            disabled={!canEditLeg2}
                             value={series.leg2.cardsA?.yellow ?? ''}
                             onChange={(e) => handleCardChange('leg2', 'a', 'yellow', e.target.value)}
                             placeholder="0"
@@ -527,7 +794,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                             type="number"
                             min={0}
                             max={99}
-                            disabled={series.confirmed || isWalkoverSeries}
+                            disabled={!canEditLeg2}
                             value={series.leg2.cardsA?.red ?? ''}
                             onChange={(e) => handleCardChange('leg2', 'a', 'red', e.target.value)}
                             placeholder="0"
@@ -536,6 +803,12 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                         </div>
                       </div>
                     </div>
+                    {isLeg2SequentiallyLocked && (
+                      <div className="flex items-center justify-center gap-1.5 rounded border border-amber-500/30 bg-amber-950/30 px-2 py-1 text-[11px] text-amber-200">
+                        <Lock className="h-3 w-3 text-amber-400 shrink-0" />
+                        <span>Bloqueado: debe cerrarse la Ida primero</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -564,7 +837,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
                     : 'Empate global · Ganador por penales:'}
                 </label>
                 <select
-                  disabled={series.confirmed || isWalkoverSeries}
+                  disabled={!canSelectPenalties}
                   value={series.penaltyWinner ?? ''}
                   onChange={(e) =>
                     handlePenaltyChange(
@@ -598,35 +871,201 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
       {/* Participante B */}
       {renderSideHeader(nameB, teamB, isByeB, isWinnerB, isWalkoverB)}
 
-      {/* Botón de acción: Confirmar o Corregir (RF-23, RF-28) */}
+      {/* Botón de acción: Handshake / Confirmar / Corregir */}
       {ready && (
-        <div className="flex items-center justify-end gap-2 border-t border-border bg-secondary/30 px-3 py-2">
-          {isWalkoverSeries ? (
-            <span className="text-[11px] font-medium text-destructive/85 italic">
-              Bloqueada por abandono (W.O.)
-            </span>
-          ) : !series.confirmed ? (
-            <PrimaryButton
-              disabled={!result.canConfirm}
-              onClick={handleConfirm}
-              className="py-1.5 px-4 text-xs"
-            >
-              Confirmar Llave
-            </PrimaryButton>
-          ) : editable ? (
-            <SecondaryButton
-              onClick={handleReopen}
-              className="py-1 px-3 text-[11px]"
-              title="Corregir los goles de esta llave"
-            >
-              <RotateCcw className="h-3 w-3" /> Corregir
-            </SecondaryButton>
-          ) : (
-            <span className="text-[11px] text-muted-foreground/70 italic">
-              Bloqueada por rondas siguientes
-            </span>
+        <div className="flex flex-col gap-2 border-t border-border bg-secondary/30 px-3 py-2">
+          {proposalError && (
+            <div className="bg-destructive/15 border border-destructive/30 rounded px-2.5 py-1 text-[11px] text-destructive font-medium">
+              {proposalError}
+            </div>
           )}
+
+          <div className="flex items-center justify-between gap-2 min-h-[32px]">
+            {/* Status indicator */}
+            <div className="text-[11px] text-muted-foreground truncate">
+              {isWalkoverSeries ? (
+                <span className="text-destructive/85 italic">Bloqueada por abandono (W.O.)</span>
+              ) : isSingleMatch ? (
+                singleMatchStatus === 'PENDING_CONFIRMATION' ? (
+                  isAwaySingle ? (
+                    <span className="text-primary font-medium">¡Te enviaron el resultado! Revisalo</span>
+                  ) : isLocalSingle ? (
+                    <span className="text-amber-400 font-medium flex items-center gap-1">
+                      <Hourglass className="h-3 w-3 animate-spin" /> Esperando confirmación rival
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground italic">En revisión de rivales</span>
+                  )
+                ) : !series.confirmed && currentUserId && !isLocalSingle ? (
+                  <span className="text-muted-foreground italic">Esperando carga del Local</span>
+                ) : null
+              ) : (
+                // Two-legged
+                leg1Status === 'PENDING_CONFIRMATION' ? (
+                  isAwayLeg1 ? (
+                    <span className="text-primary font-medium">¡Te enviaron la Ida! Revisala</span>
+                  ) : isLocalLeg1 ? (
+                    <span className="text-amber-400 font-medium flex items-center gap-1">
+                      <Hourglass className="h-3 w-3 animate-spin" /> Esperando confirmación Ida
+                    </span>
+                  ) : null
+                ) : leg2Status === 'PENDING_CONFIRMATION' ? (
+                  isAwayLeg2 ? (
+                    <span className="text-primary font-medium">¡Te enviaron la Vuelta! Revisala</span>
+                  ) : isLocalLeg2 ? (
+                    <span className="text-amber-400 font-medium flex items-center gap-1">
+                      <Hourglass className="h-3 w-3 animate-spin" /> Esperando confirmación Vuelta
+                    </span>
+                  ) : null
+                ) : !series.confirmed && currentUserId ? (
+                  (leg1Status === 'PENDING_SUBMISSION' && !isLocalLeg1) ||
+                  (leg1Status === 'CLOSED' && leg2Status === 'PENDING_SUBMISSION' && !isLocalLeg2) ? (
+                    <span className="text-muted-foreground italic">Esperando carga del Local</span>
+                  ) : null
+                ) : null
+              )}
+            </div>
+
+            {/* Buttons */}
+            <div className="flex items-center gap-2">
+              {isWalkoverSeries ? null : isSingleMatch ? (
+                singleMatchStatus === 'PENDING_CONFIRMATION' && isAwaySingle ? (
+                  <PrimaryButton
+                    onClick={openSingleMatchReview}
+                    className="py-1 px-3 text-xs bg-primary text-primary-foreground shadow-[0_0_12px_rgba(34,197,94,0.3)]"
+                  >
+                    <CheckCircle className="h-3 w-3 mr-1" />
+                    Revisar y Confirmar
+                  </PrimaryButton>
+                ) : !series.confirmed && singleMatchStatus === 'PENDING_SUBMISSION' ? (
+                  currentUserId ? (
+                    isLocalSingle ? (
+                      <PrimaryButton
+                        disabled={series.leg1.a === null || series.leg1.b === null || (result.isTied && !series.penaltyWinner) || isSubmittingProposal}
+                        onClick={handleSubmitSingleMatch}
+                        className="py-1 px-3 text-xs"
+                      >
+                        {isSubmittingProposal ? (
+                          <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                        ) : (
+                          <Send className="h-3 w-3 mr-1" />
+                        )}
+                        Enviar al rival
+                      </PrimaryButton>
+                    ) : null
+                  ) : (
+                    <PrimaryButton
+                      disabled={!result.canConfirm}
+                      onClick={handleConfirm}
+                      className="py-1.5 px-4 text-xs"
+                    >
+                      Confirmar Llave
+                    </PrimaryButton>
+                  )
+                ) : editable ? (
+                  <SecondaryButton
+                    onClick={handleReopen}
+                    className="py-1 px-3 text-[11px]"
+                    title="Corregir los goles de esta llave"
+                  >
+                    <RotateCcw className="h-3 w-3" /> Corregir
+                  </SecondaryButton>
+                ) : (
+                  <span className="text-[11px] text-muted-foreground/70 italic">
+                    Bloqueada por rondas siguientes
+                  </span>
+                )
+              ) : (
+                // Two-legged
+                !series.confirmed ? (
+                  leg1Status === 'PENDING_CONFIRMATION' && isAwayLeg1 ? (
+                    <PrimaryButton
+                      onClick={openLeg1Review}
+                      className="py-1 px-3 text-xs bg-primary text-primary-foreground shadow-[0_0_12px_rgba(34,197,94,0.3)]"
+                    >
+                      <CheckCircle className="h-3 w-3 mr-1" />
+                      Revisar y Confirmar Ida
+                    </PrimaryButton>
+                  ) : leg1Status === 'PENDING_SUBMISSION' && isLocalLeg1 && currentUserId ? (
+                    <PrimaryButton
+                      disabled={series.leg1.a === null || series.leg1.b === null || isSubmittingProposal}
+                      onClick={() => handleSubmitLeg('leg1')}
+                      className="py-1 px-3 text-xs"
+                    >
+                      {isSubmittingProposal ? (
+                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                      ) : (
+                        <Send className="h-3 w-3 mr-1" />
+                      )}
+                      Enviar Ida al rival
+                    </PrimaryButton>
+                  ) : leg2Status === 'PENDING_CONFIRMATION' && isAwayLeg2 ? (
+                    <PrimaryButton
+                      onClick={openLeg2Review}
+                      className="py-1 px-3 text-xs bg-primary text-primary-foreground shadow-[0_0_12px_rgba(34,197,94,0.3)]"
+                    >
+                      <CheckCircle className="h-3 w-3 mr-1" />
+                      Revisar y Confirmar Vuelta
+                    </PrimaryButton>
+                  ) : leg2Status === 'PENDING_SUBMISSION' && isLocalLeg2 && currentUserId ? (
+                    <PrimaryButton
+                      disabled={series.leg2.a === null || series.leg2.b === null || (result.isTied && !series.penaltyWinner) || isSubmittingProposal}
+                      onClick={() => handleSubmitLeg('leg2')}
+                      className="py-1 px-3 text-xs"
+                    >
+                      {isSubmittingProposal ? (
+                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                      ) : (
+                        <Send className="h-3 w-3 mr-1" />
+                      )}
+                      Enviar Vuelta al rival
+                    </PrimaryButton>
+                  ) : !currentUserId ? (
+                    <PrimaryButton
+                      disabled={!result.canConfirm}
+                      onClick={handleConfirm}
+                      className="py-1.5 px-4 text-xs"
+                    >
+                      Confirmar Llave
+                    </PrimaryButton>
+                  ) : result.canConfirm ? (
+                    <PrimaryButton
+                      onClick={handleConfirm}
+                      className="py-1.5 px-4 text-xs"
+                    >
+                      Cerrar Llave
+                    </PrimaryButton>
+                  ) : null
+                ) : editable ? (
+                  <SecondaryButton
+                    onClick={handleReopen}
+                    className="py-1 px-3 text-[11px]"
+                    title="Corregir los goles de esta llave"
+                  >
+                    <RotateCcw className="h-3 w-3" /> Corregir
+                  </SecondaryButton>
+                ) : (
+                  <span className="text-[11px] text-muted-foreground/70 italic">
+                    Bloqueada por rondas siguientes
+                  </span>
+                )
+              )}
+            </div>
+          </div>
         </div>
+      )}
+
+      {handshakeMatchData && (
+        <HandshakeModal
+          isOpen={Boolean(handshakeMatchData)}
+          onClose={() => setHandshakeMatchData(null)}
+          matchData={handshakeMatchData}
+          onSuccess={() => {
+            if (isSingleMatch || (series.leg1.a !== null && series.leg2.a !== null)) {
+              dispatch({ type: 'SERIES_CONFIRMED', seriesId: series.id });
+            }
+          }}
+        />
       )}
     </div>
   );

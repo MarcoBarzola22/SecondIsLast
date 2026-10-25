@@ -1,3 +1,4 @@
+import type { MatchState } from './handshake';
 import {
   ActiveTournament,
   LeagueMatch,
@@ -80,6 +81,8 @@ export function applyWalkoverToLeagueMatches(
       cardsA: { yellow: 0, red: 0 },
       cardsB: { yellow: 0, red: 0 },
       confirmed: true,
+      status: 'CLOSED',
+      version: (m.version ?? 0) + 1,
     };
   });
 }
@@ -185,6 +188,8 @@ export function applyWalkoverToSeries(
         leg2: updatedLeg2,
         penaltyWinner: null,
         confirmed: true,
+        status: 'CLOSED',
+        version: (s.version ?? 0) + 1,
         winner,
         loser,
       };
@@ -251,10 +256,67 @@ export function resolvePendingWalkoverSeries(
 }
 
 /**
- * Core pure function to apply a player walkover (abandonment) to a tournament (RF-64, RF-65).
+ * Updates all matches in MatchState format for a walkover player (RF-116, RF-117):
+ * - All matches involving playerId are overwritten to 0-3 defeats (3-0 for rival).
+ * - All cards are wiped to 0.
+ * - penaltiesWinnerId is reset to null.
+ * - Match status becomes CLOSED immediately without requiring handshake from the rival.
+ * - Match version is incremented.
+ * - If both participants have abandoned, the match is scored 0-0.
+ */
+export function applyWalkoverToMatches<T extends MatchState>(
+  matches: readonly T[],
+  playerId: string,
+  existingWalkoverIds: readonly string[] = []
+): T[] {
+  const allWalkovers = new Set([...existingWalkoverIds, playerId]);
+
+  return matches.map((m) => {
+    const isHome = m.homeParticipantId === playerId;
+    const isAway = m.awayParticipantId === playerId;
+
+    if (!isHome && !isAway) {
+      return m;
+    }
+
+    const rivalId = isHome ? m.awayParticipantId : m.homeParticipantId;
+    const rivalIsWalkover = rivalId ? allWalkovers.has(rivalId) : false;
+
+    let homeScore: number;
+    let awayScore: number;
+
+    if (rivalIsWalkover || !rivalId) {
+      homeScore = WALKOVER_GOALS_FORFEIT;
+      awayScore = WALKOVER_GOALS_FORFEIT;
+    } else if (isHome) {
+      homeScore = WALKOVER_GOALS_FORFEIT;
+      awayScore = WALKOVER_GOALS_AWARDED;
+    } else {
+      homeScore = WALKOVER_GOALS_AWARDED;
+      awayScore = WALKOVER_GOALS_FORFEIT;
+    }
+
+    return {
+      ...m,
+      homeScore,
+      awayScore,
+      homeYellowCards: 0,
+      awayYellowCards: 0,
+      homeRedCards: 0,
+      awayRedCards: 0,
+      penaltiesWinnerId: null,
+      status: 'CLOSED',
+      version: m.version + 1,
+    };
+  });
+}
+
+/**
+ * Core pure function to apply a player walkover (abandonment) to a tournament (RF-64, RF-65, RF-116, RF-117).
  * - Validates participation, current phase and previous abandonments.
- * - Overwrites all matches (league or bracket) as 0-3 defeats against the player.
+ * - Overwrites all matches (league, group, bracket or handshake matches) as 0-3 defeats against the player.
  * - Advances rivals in bracket elimination rounds.
+ * - Automatically closes all matches with status CLOSED and increments version.
  * - Records playerId in walkoverPlayerIds.
  */
 export function applyWalkoverToTournament(
@@ -306,11 +368,21 @@ export function applyWalkoverToTournament(
     );
   }
 
+  let updatedMatches = (tournament as any).matches as MatchState[] | undefined;
+  if (updatedMatches && updatedMatches.length > 0) {
+    updatedMatches = applyWalkoverToMatches(
+      updatedMatches,
+      playerId,
+      currentWalkovers
+    );
+  }
+
   return {
     ...tournament,
     leagueMatches: updatedLeagueMatches,
     groupMatches: updatedGroupMatches,
     series: updatedSeries,
+    matches: updatedMatches,
     walkoverPlayerIds: updatedWalkovers,
   };
 }

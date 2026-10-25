@@ -1410,6 +1410,9 @@ export function appReducer(state: AppData, action: Action): AppData {
           state.activeTournament,
           action.playerId
         );
+        if (action.matches) {
+          (updatedTournament as any).matches = action.matches;
+        }
         return {
           ...state,
           activeTournament: updatedTournament,
@@ -1432,6 +1435,129 @@ export function appReducer(state: AppData, action: Action): AppData {
         console.warn('[Reducer] Error adding custom theme:', err);
         return state;
       }
+    }
+
+    case 'MATCH_CLOSED_EVENT_RECEIVED': {
+      if (!state.activeTournament) return state;
+
+      const { matchId, seriesId, match } = action;
+      let updatedLeagueMatches = state.activeTournament.leagueMatches;
+      let updatedGroupMatches = state.activeTournament.groupMatches;
+      let updatedSeries = state.activeTournament.series;
+      let updatedMatches = state.activeTournament.matches;
+
+      // 1. Update League match if present
+      if (updatedLeagueMatches) {
+        updatedLeagueMatches = updatedLeagueMatches.map((m) => {
+          if (m.id === matchId || m.id === seriesId) {
+            return {
+              ...m,
+              scoreA: match?.homeScore !== undefined ? match.homeScore : m.scoreA,
+              scoreB: match?.awayScore !== undefined ? match.awayScore : m.scoreB,
+              cardsA: match
+                ? { yellow: match.homeYellowCards ?? 0, red: match.homeRedCards ?? 0 }
+                : m.cardsA,
+              cardsB: match
+                ? { yellow: match.awayYellowCards ?? 0, red: match.awayRedCards ?? 0 }
+                : m.cardsB,
+              confirmed: true,
+              status: 'CLOSED' as const,
+              version: match?.version ?? (m.version ? m.version + 1 : 2),
+            };
+          }
+          return m;
+        });
+      }
+
+      // 2. Update Group match if present
+      if (updatedGroupMatches) {
+        updatedGroupMatches = updatedGroupMatches.map((m) => {
+          if (m.id === matchId || m.id === seriesId) {
+            return {
+              ...m,
+              scoreA: match?.homeScore !== undefined ? match.homeScore : m.scoreA,
+              scoreB: match?.awayScore !== undefined ? match.awayScore : m.scoreB,
+              cardsA: match
+                ? { yellow: match.homeYellowCards ?? 0, red: match.homeRedCards ?? 0 }
+                : m.cardsA,
+              cardsB: match
+                ? { yellow: match.awayYellowCards ?? 0, red: match.awayRedCards ?? 0 }
+                : m.cardsB,
+              confirmed: true,
+              status: 'CLOSED' as const,
+              version: match?.version ?? (m.version ? m.version + 1 : 2),
+            };
+          }
+          return m;
+        });
+      }
+
+      // 3. Update Series if present
+      if (updatedSeries) {
+        updatedSeries = updatedSeries.map((s) => {
+          if (s.id === seriesId || s.id === matchId) {
+            const isLeg1 = !match || match.leg === 1 || !match.leg;
+            const updatedLeg1 = isLeg1 && match
+              ? {
+                  ...s.leg1,
+                  a: match.homeScore !== undefined ? match.homeScore : s.leg1.a,
+                  b: match.awayScore !== undefined ? match.awayScore : s.leg1.b,
+                  cardsA: { yellow: match.homeYellowCards ?? 0, red: match.homeRedCards ?? 0 },
+                  cardsB: { yellow: match.awayYellowCards ?? 0, red: match.awayRedCards ?? 0 },
+                }
+              : s.leg1;
+            const updatedLeg2 = match && match.leg === 2
+              ? {
+                  ...s.leg2,
+                  b: match.homeScore !== undefined ? match.homeScore : s.leg2.b,
+                  a: match.awayScore !== undefined ? match.awayScore : s.leg2.a,
+                  cardsB: { yellow: match.homeYellowCards ?? 0, red: match.homeRedCards ?? 0 },
+                  cardsA: { yellow: match.awayYellowCards ?? 0, red: match.awayRedCards ?? 0 },
+                }
+              : s.leg2;
+            const isSingle = state.activeTournament?.matchFormat === 'single_match';
+            const shouldConfirm = isSingle || match?.leg === 2 || !match;
+
+            return {
+              ...s,
+              leg1: updatedLeg1,
+              leg2: updatedLeg2,
+              penaltyWinner: match?.penaltiesWinnerId ?? s.penaltyWinner,
+              confirmed: shouldConfirm ? true : s.confirmed,
+              status: shouldConfirm ? ('CLOSED' as const) : s.status,
+              version: match?.version ?? (s.version ? s.version + 1 : 2),
+            };
+          }
+          return s;
+        });
+      }
+
+      // 4. Update raw tournament matches array if present
+      if (updatedMatches) {
+        updatedMatches = updatedMatches.map((m) => {
+          if (m.id === matchId || (seriesId && (m as any).seriesId === seriesId)) {
+            return {
+              ...m,
+              status: 'CLOSED' as const,
+              version: match?.version ?? (m.version + 1),
+              homeScore: match?.homeScore !== undefined ? match.homeScore : m.homeScore,
+              awayScore: match?.awayScore !== undefined ? match.awayScore : m.awayScore,
+            };
+          }
+          return m;
+        });
+      }
+
+      return {
+        ...state,
+        activeTournament: {
+          ...state.activeTournament,
+          leagueMatches: updatedLeagueMatches,
+          groupMatches: updatedGroupMatches,
+          series: updatedSeries,
+          matches: updatedMatches,
+        },
+      };
     }
 
     default:

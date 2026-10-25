@@ -11,13 +11,14 @@ function createEmptyLeg(): LegScore {
   return { a: null, b: null };
 }
 
-function createSeries(
+export function createSeries(
   id: SeriesId,
   round: Round,
   playerA: PlayerId | null,
   playerB: PlayerId | null,
   winnerTo: SlotTarget | null,
-  loserTo: SlotTarget | null
+  loserTo: SlotTarget | null,
+  isBye: boolean = false
 ): Series {
   return {
     id,
@@ -27,10 +28,12 @@ function createSeries(
     leg1: createEmptyLeg(),
     leg2: createEmptyLeg(),
     penaltyWinner: null,
-    confirmed: false,
+    confirmed: isBye,
+    status: isBye ? 'CLOSED' : 'PENDING_SUBMISSION',
+    isBye,
     winnerTo,
     loserTo,
-    winner: null,
+    winner: isBye ? playerA : null,
     loser: null,
   };
 }

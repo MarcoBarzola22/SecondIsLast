@@ -4,11 +4,14 @@ import { computeLeagueTable, generateLeagueFixture } from '../league';
 import type { ActiveTournament, Player, Series } from '../types';
 import {
   applyWalkoverToLeagueMatches,
+  applyWalkoverToMatches,
   applyWalkoverToSeries,
   applyWalkoverToTournament,
   isMatchLockedByWalkover,
   isPlayerWalkover,
 } from '../walkover';
+import type { MatchState } from '../handshake';
+import { canPlayerPlayMatch } from '../sequentialLock';
 
 const samplePlayers: Player[] = [
   { id: 'p1', firstName: 'Juan', lastName: 'Pérez', createdAt: '2026-01-01' },
@@ -589,6 +592,214 @@ describe('walkover domain logic (RF-64, RF-65, RF-66)', () => {
           walkoverList
         )
       ).toBe(false);
+    });
+  });
+
+  describe('Handshake States and Sequential Queue Liberation (RF-116, RF-117)', () => {
+    it('applyWalkoverToMatches sets 0-3 defeats, removes cards, marks status as CLOSED and increments version', () => {
+      const matches: MatchState[] = [
+        {
+          id: 'm1',
+          homeParticipantId: 'p1', // Walkover player is home
+          awayParticipantId: 'p2',
+          status: 'PENDING_SUBMISSION',
+          homeScore: null,
+          awayScore: null,
+          homeYellowCards: 0,
+          awayYellowCards: 0,
+          homeRedCards: 0,
+          awayRedCards: 0,
+          penaltiesWinnerId: null,
+          version: 1,
+          isBye: false,
+        },
+        {
+          id: 'm2',
+          homeParticipantId: 'p3',
+          awayParticipantId: 'p1', // Walkover player is away
+          status: 'PENDING_CONFIRMATION',
+          homeScore: 2,
+          awayScore: 1,
+          homeYellowCards: 1,
+          awayYellowCards: 2,
+          homeRedCards: 0,
+          awayRedCards: 1,
+          penaltiesWinnerId: null,
+          version: 2,
+          isBye: false,
+        },
+        {
+          id: 'm3',
+          homeParticipantId: 'p2',
+          awayParticipantId: 'p3', // Unrelated match
+          status: 'PENDING_SUBMISSION',
+          homeScore: null,
+          awayScore: null,
+          homeYellowCards: 0,
+          awayYellowCards: 0,
+          homeRedCards: 0,
+          awayRedCards: 0,
+          penaltiesWinnerId: null,
+          version: 1,
+          isBye: false,
+        },
+      ];
+
+      const updated = applyWalkoverToMatches(matches, 'p1');
+
+      // m1: p1 (home) forfeited -> 0-3 against p1
+      const m1 = updated.find((m) => m.id === 'm1')!;
+      expect(m1.homeScore).toBe(0);
+      expect(m1.awayScore).toBe(3);
+      expect(m1.status).toBe('CLOSED');
+      expect(m1.version).toBe(2);
+      expect(m1.homeYellowCards).toBe(0);
+      expect(m1.awayYellowCards).toBe(0);
+      expect(m1.homeRedCards).toBe(0);
+      expect(m1.awayRedCards).toBe(0);
+
+      // m2: p1 (away) forfeited -> 3-0 for p3, cards wiped
+      const m2 = updated.find((m) => m.id === 'm2')!;
+      expect(m2.homeScore).toBe(3);
+      expect(m2.awayScore).toBe(0);
+      expect(m2.status).toBe('CLOSED');
+      expect(m2.version).toBe(3);
+      expect(m2.homeYellowCards).toBe(0);
+      expect(m2.awayYellowCards).toBe(0);
+      expect(m2.homeRedCards).toBe(0);
+      expect(m2.awayRedCards).toBe(0);
+
+      // m3: untouched
+      const m3 = updated.find((m) => m.id === 'm3')!;
+      expect(m3.status).toBe('PENDING_SUBMISSION');
+      expect(m3.version).toBe(1);
+    });
+
+    it('applyWalkoverToTournament marks all matches and series as CLOSED and increments versions', () => {
+      const tournament: ActiveTournament = {
+        id: 't1',
+        createdAt: '2026-01-01',
+        phase: 'league',
+        tournamentType: 'league',
+        participantIds: ['p1', 'p2', 'p3', 'p4'],
+        theme: 'Clubes',
+        draftOrder: ['p1', 'p2', 'p3', 'p4'],
+        teams: sampleTeams,
+        byes: [],
+        series: [],
+        leagueMatches: [
+          {
+            id: 'lm1',
+            round: 1,
+            playerA: 'p1',
+            playerB: 'p2',
+            scoreA: 1,
+            scoreB: 0,
+            confirmed: false,
+            status: 'PENDING_CONFIRMATION',
+            version: 2,
+          },
+          {
+            id: 'lm2',
+            round: 1,
+            playerA: 'p3',
+            playerB: 'p4',
+            scoreA: null,
+            scoreB: null,
+            confirmed: false,
+            status: 'PENDING_SUBMISSION',
+            version: 1,
+          },
+        ],
+      };
+
+      const result = applyWalkoverToTournament(tournament, 'p1');
+
+      const lm1 = result.leagueMatches!.find((m) => m.id === 'lm1')!;
+      expect(lm1.scoreA).toBe(0);
+      expect(lm1.scoreB).toBe(3);
+      expect(lm1.confirmed).toBe(true);
+      expect(lm1.status).toBe('CLOSED');
+      expect(lm1.version).toBe(3);
+
+      const lm2 = result.leagueMatches!.find((m) => m.id === 'lm2')!;
+      expect(lm2.status).toBe('PENDING_SUBMISSION');
+      expect(lm2.version).toBe(1);
+    });
+
+    it('immediately unblocks rival in sequential lock queue upon walkover (RF-117)', () => {
+      // Round 1: p2 vs p1 (p1 is desertor) in PENDING_SUBMISSION
+      const r1_match: MatchState = {
+        id: 'r1_m1',
+        homeParticipantId: 'p2',
+        awayParticipantId: 'p1',
+        status: 'PENDING_SUBMISSION',
+        homeScore: null,
+        awayScore: null,
+        homeYellowCards: 0,
+        awayYellowCards: 0,
+        homeRedCards: 0,
+        awayRedCards: 0,
+        penaltiesWinnerId: null,
+        version: 1,
+        isBye: false,
+      };
+
+      // Round 1: p3 vs p4 -> already CLOSED
+      const r1_closed: MatchState = {
+        id: 'r1_m2',
+        homeParticipantId: 'p3',
+        awayParticipantId: 'p4',
+        status: 'CLOSED',
+        homeScore: 1,
+        awayScore: 0,
+        homeYellowCards: 0,
+        awayYellowCards: 0,
+        homeRedCards: 0,
+        awayRedCards: 0,
+        penaltiesWinnerId: null,
+        version: 2,
+        isBye: false,
+      };
+
+      // Target Round 2 match: p2 vs p3
+      const targetR2Match: MatchState = {
+        id: 'r2_m1',
+        round: 2,
+        homeParticipantId: 'p2',
+        awayParticipantId: 'p3',
+        status: 'PENDING_SUBMISSION',
+        homeScore: null,
+        awayScore: null,
+        homeYellowCards: 0,
+        awayYellowCards: 0,
+        homeRedCards: 0,
+        awayRedCards: 0,
+        penaltiesWinnerId: null,
+        version: 1,
+        isBye: false,
+      };
+
+      const matchesBefore: MatchState[] = [
+        { ...r1_match, round: 1 },
+        { ...r1_closed, round: 1 },
+        targetR2Match,
+      ];
+
+      // Before walkover: p2 is blocked because r1_match is not closed
+      expect(canPlayerPlayMatch(matchesBefore, targetR2Match)).toBe(false);
+
+      // p1 abandons tournament
+      const matchesAfter = applyWalkoverToMatches(matchesBefore, 'p1');
+
+      // The match is closed automatically
+      const r1After = matchesAfter.find((m) => m.id === 'r1_m1')!;
+      expect(r1After.status).toBe('CLOSED');
+      expect(r1After.homeScore).toBe(3);
+      expect(r1After.awayScore).toBe(0);
+
+      // After walkover: p2 is immediately unlocked to play Round 2!
+      expect(canPlayerPlayMatch(matchesAfter, targetR2Match)).toBe(true);
     });
   });
 });

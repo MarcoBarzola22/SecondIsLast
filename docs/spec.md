@@ -150,19 +150,19 @@ Se mantienen intactas todas las reglas matemáticas de torneos, formatos (Llaves
 
 ## 8. Criterios de Finalización (Definition of Done)
 
-- [ ] Autenticación Google OAuth integrada con validación estricta de Whitelist.
-- [ ] Panel de administración de Whitelist operativo con vinculación a perfiles de jugadores históricos.
-- [ ] Lobby de asistencia con persistencia de presencia ante desconexiones y regla de quórum ($\ge 4$).
-- [ ] Votación de formato y temática en tiempo real con temporizador de 120 segundos, descarte de formatos inválidos para $N$ y desempate aleatorio.
-- [ ] Visualización sincronizada de animaciones de sorteo en todos los clientes conectados.
-- [ ] Precarga y previsualización de equipos asociados a cada temática.
-- [ ] Handshake atómico por partido con registro de `penaltiesWinner` y control de concurrencia optimista por `version`.
-- [ ] Auto-liquidación inmediata de Byes y bloqueo secuencial por jugador funcionando.
-- [ ] Dos vías de Walkover operativas (auto-declaración y admin) con autoconfirmación en 0-3 y liberación de rivales.
-- [ ] Modo Offline en frontend con banner visual y bloqueo seguro de mutaciones ante caídas de red.
-- [ ] Sección de Reglamento oficial disponible para consulta de solo lectura.
-- [ ] Interfaz completamente adaptada para navegación en celular y en computadora.
-- [ ] Suite de pruebas unitarias sobre lógica de dominio y pruebas de integración sobre endpoints y eventos de WebSocket.
+- [x] Autenticación Google OAuth integrada con validación estricta de Whitelist.
+- [x] Panel de administración de Whitelist operativo con vinculación a perfiles de jugadores históricos.
+- [x] Lobby de asistencia con persistencia de presencia ante desconexiones y regla de quórum ($\ge 4$).
+- [x] Votación de formato y temática en tiempo real con temporizador de 120 segundos, descarte de formatos inválidos para $N$ y desempate aleatorio.
+- [x] Visualización sincronizada de animaciones de sorteo en todos los clientes conectados.
+- [x] Precarga y previsualización de equipos asociados a cada temática.
+- [x] Handshake atómico por partido con registro de `penaltiesWinner` y control de concurrencia optimista por `version`.
+- [x] Auto-liquidación inmediata de Byes y bloqueo secuencial por jugador funcionando.
+- [x] Dos vías de Walkover operativas (auto-declaración y admin) con autoconfirmación en 0-3 y liberación de rivales.
+- [x] Modo Offline en frontend con banner visual y bloqueo seguro de mutaciones ante caídas de red.
+- [x] Sección de Reglamento oficial disponible para consulta de solo lectura.
+- [x] Interfaz completamente adaptada para navegación en celular y en computadora.
+- [x] Suite de pruebas unitarias sobre lógica de dominio y pruebas de integración sobre endpoints y eventos de WebSocket.
 
 ---
 

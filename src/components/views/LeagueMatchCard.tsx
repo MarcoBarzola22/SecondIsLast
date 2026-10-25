@@ -1,9 +1,18 @@
-import { AlertTriangle, CheckCircle, RotateCcw, Sparkles, Trophy } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, CheckCircle, RotateCcw, Sparkles, Trophy, Hourglass, Send, Loader2, Lock } from 'lucide-react';
 import { formatPlayerName } from '../../domain/players';
 import type { MatchScenarioGuidance } from '../../domain/scenarios';
 import type { LeagueMatch, Player, PlayerId } from '../../domain/types';
+import {
+  getParticipantBlockingMatches,
+  formatSequentialLockMessage,
+  type MatchForLock,
+} from '../../domain/sequentialLock';
 import { useAppDispatch, useAppState } from '../../state/AppContext';
+import { useAuth } from '../../context/AuthContext';
+import { useNetworkStatus } from '../../hooks/useNetworkStatus';
 import { PrimaryButton, SecondaryButton } from '../ui/Buttons';
+import { HandshakeModal } from './HandshakeModal';
 
 interface LeagueMatchCardProps {
   match: LeagueMatch;
@@ -24,6 +33,12 @@ export function LeagueMatchCard({
 }: LeagueMatchCardProps) {
   const { activeTournament } = useAppState();
   const dispatch = useAppDispatch();
+  const { user } = useAuth();
+  const { isOffline } = useNetworkStatus();
+
+  const [isHandshakeModalOpen, setIsHandshakeModalOpen] = useState(false);
+  const [isSubmittingProposal, setIsSubmittingProposal] = useState(false);
+  const [proposalError, setProposalError] = useState<string | null>(null);
 
   const walkoverPlayerIds = activeTournament?.walkoverPlayerIds ?? [];
   const isWalkoverA = walkoverPlayerIds.includes(match.playerA);
@@ -42,12 +57,59 @@ export function LeagueMatchCard({
   const isConfirmed = match.confirmed;
   const isComplete = match.scoreA !== null && match.scoreB !== null;
 
+  const currentUserId = user?.playerId;
+  const matchStatus = match.status || (isConfirmed ? 'CLOSED' : 'PENDING_SUBMISSION');
+
+  // Sequential locking evaluation (RF-114, RF-115)
+  const allMatchesSource = (
+    isGroupMatch
+      ? (activeTournament?.groupMatches ?? [])
+      : (activeTournament?.leagueMatches ?? [])
+  );
+
+  const allMatchesForLock: MatchForLock[] = allMatchesSource.map((m) => ({
+    id: m.id,
+    round: m.round,
+    playerA: m.playerA,
+    playerB: m.playerB,
+    status: m.confirmed ? 'CLOSED' : (m.status || 'PENDING_SUBMISSION'),
+    isBye: false,
+  }));
+
+  const targetMatchForLock: MatchForLock = {
+    id: match.id,
+    round: match.round,
+    playerA: match.playerA,
+    playerB: match.playerB,
+    status: isConfirmed ? 'CLOSED' : matchStatus,
+    isBye: false,
+  };
+
+  const blockingA = !isConfirmed && !isWalkover
+    ? getParticipantBlockingMatches(allMatchesForLock, targetMatchForLock, match.playerA)
+    : [];
+  const blockingB = !isConfirmed && !isWalkover
+    ? getParticipantBlockingMatches(allMatchesForLock, targetMatchForLock, match.playerB)
+    : [];
+
+  const isSequentiallyLocked = blockingA.length > 0 || blockingB.length > 0;
+
+  const lockMessage = isSequentiallyLocked
+    ? formatSequentialLockMessage(nameA, nameB, blockingA, blockingB, match.round)
+    : null;
+
+  // If user is logged in, restrict editing to Local (RF-106). In offline mode, allow local entry.
+  // Neither Local nor Away can edit if sequentially locked (RF-114).
+  const isLocal = currentUserId ? currentUserId === match.playerA : true;
+  const isAway = currentUserId ? currentUserId === match.playerB : false;
+  const canEdit = !isConfirmed && !isWalkover && !isSequentiallyLocked && matchStatus === 'PENDING_SUBMISSION' && isLocal;
+
   const isWinnerA = isConfirmed && isComplete && match.scoreA! > match.scoreB!;
   const isWinnerB = isConfirmed && isComplete && match.scoreB! > match.scoreA!;
   const isDraw = isConfirmed && isComplete && match.scoreA! === match.scoreB!;
 
   const handleScoreChange = (side: 'a' | 'b', valueStr: string) => {
-    if (isConfirmed || isWalkover) return;
+    if (!canEdit) return;
     const trimmed = valueStr.trim();
     if (trimmed === '') {
       dispatch(
@@ -101,7 +163,7 @@ export function LeagueMatchCard({
     cardType: 'yellow' | 'red',
     valueStr: string
   ) => {
-    if (isConfirmed || isWalkover) return;
+    if (!canEdit) return;
     const currentCards =
       (side === 'a' ? match.cardsA : match.cardsB) ?? { yellow: 0, red: 0 };
     const trimmed = valueStr.trim();
@@ -160,6 +222,44 @@ export function LeagueMatchCard({
     }
   };
 
+  const handleSubmitProposal = async () => {
+    if (!isComplete || isConfirmed || isWalkover) return;
+    setIsSubmittingProposal(true);
+    setProposalError(null);
+    try {
+      const res = await fetch(`/api/matches/${match.id}/submit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          homeScore: match.scoreA,
+          awayScore: match.scoreB,
+          homeYellowCards: match.cardsA?.yellow ?? 0,
+          awayYellowCards: match.cardsB?.yellow ?? 0,
+          homeRedCards: match.cardsA?.red ?? 0,
+          awayRedCards: match.cardsB?.red ?? 0,
+          expectedVersion: match.version ?? 1,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 404) {
+          handleConfirm();
+          return;
+        }
+        throw new Error(data.error || 'Error al proponer resultado.');
+      }
+    } catch (err: any) {
+      setProposalError(err.message || 'Error al enviar propuesta.');
+    } finally {
+      setIsSubmittingProposal(false);
+    }
+  };
+
   const handleConfirm = () => {
     if (!isComplete || isWalkover) return;
     dispatch(
@@ -197,7 +297,9 @@ export function LeagueMatchCard({
           ? 'border-destructive/40 bg-card/80 opacity-90'
           : isConfirmed
             ? 'border-border/80 bg-card/90'
-            : 'border-accent/70 bg-card shadow-[0_0_15px_rgba(56,189,248,0.15)]'
+            : isSequentiallyLocked
+              ? 'border-amber-500/40 bg-card/75 opacity-90 shadow-[0_0_12px_rgba(245,158,11,0.1)]'
+              : 'border-accent/70 bg-card shadow-[0_0_15px_rgba(56,189,248,0.15)]'
       }`}
     >
       {/* Header del partido */}
@@ -209,9 +311,17 @@ export function LeagueMatchCard({
           <span className="flex items-center gap-1 font-display text-[10px] font-bold uppercase tracking-wider text-destructive">
             <AlertTriangle className="h-3 w-3" /> W.O. (Abandono)
           </span>
-        ) : isConfirmed ? (
+        ) : isConfirmed || matchStatus === 'CLOSED' ? (
           <span className="flex items-center gap-1 font-display text-[10px] font-bold uppercase tracking-wider text-primary">
             <CheckCircle className="h-3 w-3" /> Confirmado
+          </span>
+        ) : matchStatus === 'PENDING_CONFIRMATION' ? (
+          <span className="flex items-center gap-1 font-display text-[10px] font-bold uppercase tracking-wider text-amber-400">
+            <Hourglass className="h-3 w-3 animate-spin" /> Esperando confirmación
+          </span>
+        ) : isSequentiallyLocked ? (
+          <span className="flex items-center gap-1 font-display text-[10px] font-bold uppercase tracking-wider text-amber-400">
+            <Lock className="h-3 w-3" /> Bloqueado por Fecha anterior
           </span>
         ) : (
           <span className="font-display text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -219,6 +329,14 @@ export function LeagueMatchCard({
           </span>
         )}
       </div>
+
+      {/* Banner de Bloqueo Secuencial (RF-114, RF-115) */}
+      {isSequentiallyLocked && lockMessage && (
+        <div className="flex items-start gap-1.5 border-b border-amber-500/30 bg-amber-950/40 px-3 py-1.5 text-xs text-amber-200">
+          <Lock className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
+          <span className="text-[11px] font-medium leading-tight">{lockMessage}</span>
+        </div>
+      )}
 
       {/* Banner de Escenarios Predictivos en Fechas Finales (RF-75) */}
       {scenarioGuidance &&
@@ -296,7 +414,7 @@ export function LeagueMatchCard({
             type="number"
             min={0}
             max={99}
-            disabled={isConfirmed || isWalkover}
+            disabled={!canEdit}
             value={match.scoreA ?? ''}
             onChange={(e) => handleScoreChange('a', e.target.value)}
             placeholder="0"
@@ -308,7 +426,7 @@ export function LeagueMatchCard({
             type="number"
             min={0}
             max={99}
-            disabled={isConfirmed || isWalkover}
+            disabled={!canEdit}
             value={match.scoreB ?? ''}
             onChange={(e) => handleScoreChange('b', e.target.value)}
             placeholder="0"
@@ -327,7 +445,7 @@ export function LeagueMatchCard({
                 type="number"
                 min={0}
                 max={99}
-                disabled={isConfirmed || isWalkover}
+                disabled={!canEdit}
                 value={match.cardsA?.yellow ?? ''}
                 onChange={(e) => handleCardChange('a', 'yellow', e.target.value)}
                 placeholder="0"
@@ -340,7 +458,7 @@ export function LeagueMatchCard({
                 type="number"
                 min={0}
                 max={99}
-                disabled={isConfirmed || isWalkover}
+                disabled={!canEdit}
                 value={match.cardsA?.red ?? ''}
                 onChange={(e) => handleCardChange('a', 'red', e.target.value)}
                 placeholder="0"
@@ -361,7 +479,7 @@ export function LeagueMatchCard({
                 type="number"
                 min={0}
                 max={99}
-                disabled={isConfirmed || isWalkover}
+                disabled={!canEdit}
                 value={match.cardsB?.yellow ?? ''}
                 onChange={(e) => handleCardChange('b', 'yellow', e.target.value)}
                 placeholder="0"
@@ -374,7 +492,7 @@ export function LeagueMatchCard({
                 type="number"
                 min={0}
                 max={99}
-                disabled={isConfirmed || isWalkover}
+                disabled={!canEdit}
                 value={match.cardsB?.red ?? ''}
                 onChange={(e) => handleCardChange('b', 'red', e.target.value)}
                 placeholder="0"
@@ -426,29 +544,115 @@ export function LeagueMatchCard({
       </div>
 
       {/* Botón de acción */}
-      <div className="flex items-center justify-end gap-2 border-t border-border bg-secondary/30 px-3 py-1.5 min-h-[36px]">
-        {isWalkover ? (
-          <span className="text-[11px] font-medium text-destructive/85 italic">
-            Bloqueado por abandono (W.O.)
-          </span>
-        ) : !isConfirmed ? (
-          <PrimaryButton
-            disabled={!isComplete}
-            onClick={handleConfirm}
-            className="py-1 px-3 text-xs"
-          >
-            Confirmar
-          </PrimaryButton>
-        ) : (
-          <SecondaryButton
-            onClick={handleReopen}
-            className="py-1 px-2.5 text-[11px]"
-            title="Corregir el resultado de este partido"
-          >
-            <RotateCcw className="h-3 w-3" /> Corregir
-          </SecondaryButton>
-        )}
+      <div className="flex items-center justify-between gap-2 border-t border-border bg-secondary/30 px-3 py-1.5 min-h-[36px]">
+        {/* Role label / Helper status */}
+        <div className="text-[11px] text-muted-foreground truncate">
+          {isWalkover ? (
+            <span className="text-destructive/85 italic">Bloqueado por abandono (W.O.)</span>
+          ) : isSequentiallyLocked ? (
+            <span className="text-amber-400 font-medium flex items-center gap-1">
+              <Lock className="h-3 w-3 shrink-0" /> {lockMessage}
+            </span>
+          ) : matchStatus === 'PENDING_CONFIRMATION' ? (
+            isAway ? (
+              <span className="text-primary font-medium">¡Te enviaron el resultado! Revisalo</span>
+            ) : isLocal ? (
+              <span className="text-amber-400 font-medium flex items-center gap-1">
+                <Hourglass className="h-3 w-3" /> Esperando confirmación rival
+              </span>
+            ) : (
+              <span className="text-muted-foreground italic">En revisión de rivales</span>
+            )
+          ) : !isConfirmed && currentUserId && !isLocal ? (
+            <span className="text-muted-foreground italic">Esperando carga del Local</span>
+          ) : null}
+        </div>
+
+        {/* Action Button */}
+        <div>
+          {isWalkover || isSequentiallyLocked ? null : matchStatus === 'PENDING_CONFIRMATION' && isAway ? (
+            <PrimaryButton
+              onClick={() => setIsHandshakeModalOpen(true)}
+              className="py-1 px-3 text-xs bg-primary text-primary-foreground shadow-[0_0_12px_rgba(34,197,94,0.3)]"
+            >
+              <CheckCircle className="h-3 w-3 mr-1" />
+              Revisar y Confirmar
+            </PrimaryButton>
+          ) : !isConfirmed && matchStatus === 'PENDING_SUBMISSION' ? (
+            currentUserId ? (
+              isLocal ? (
+                <PrimaryButton
+                  disabled={!isComplete || isSubmittingProposal || isOffline}
+                  onClick={handleSubmitProposal}
+                  className="py-1 px-3 text-xs"
+                  title={isOffline ? 'Sin conexión: envío pausado' : undefined}
+                >
+                  {isSubmittingProposal ? (
+                    <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                  ) : (
+                    <Send className="h-3 w-3 mr-1" />
+                  )}
+                  Enviar al rival
+                </PrimaryButton>
+              ) : null
+            ) : (
+              <PrimaryButton
+                disabled={!isComplete}
+                onClick={handleConfirm}
+                className="py-1 px-3 text-xs"
+              >
+                Confirmar
+              </PrimaryButton>
+            )
+          ) : (
+            <SecondaryButton
+              onClick={handleReopen}
+              className="py-1 px-2.5 text-[11px]"
+              title="Corregir el resultado de este partido"
+            >
+              <RotateCcw className="h-3 w-3" /> Corregir
+            </SecondaryButton>
+          )}
+        </div>
       </div>
+
+      {proposalError && (
+        <div className="bg-destructive/15 border-t border-destructive/30 px-3 py-1 text-[11px] text-destructive font-medium">
+          {proposalError}
+        </div>
+      )}
+
+      {isHandshakeModalOpen && (
+        <HandshakeModal
+          isOpen={isHandshakeModalOpen}
+          onClose={() => setIsHandshakeModalOpen(false)}
+          matchData={{
+            id: match.id,
+            round: match.round,
+            homePlayerId: match.playerA,
+            awayPlayerId: match.playerB,
+            homePlayerName: nameA,
+            homeTeamName: teamA,
+            awayPlayerName: nameB,
+            awayTeamName: teamB,
+            homeScore: match.scoreA ?? 0,
+            awayScore: match.scoreB ?? 0,
+            homeYellowCards: match.cardsA?.yellow ?? 0,
+            awayYellowCards: match.cardsB?.yellow ?? 0,
+            homeRedCards: match.cardsA?.red ?? 0,
+            awayRedCards: match.cardsB?.red ?? 0,
+            version: match.version ?? 1,
+            status: matchStatus,
+          }}
+          onSuccess={() => {
+            dispatch(
+              isGroupMatch
+                ? { type: 'GROUP_MATCH_CONFIRMED', matchId: match.id }
+                : { type: 'LEAGUE_MATCH_CONFIRMED', matchId: match.id }
+            );
+          }}
+        />
+      )}
     </div>
   );
 }

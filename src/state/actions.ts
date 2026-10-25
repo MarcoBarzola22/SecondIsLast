@@ -112,7 +112,20 @@ export type Action =
       now: string;
     }
   | { type: 'TOURNAMENT_ABANDONED' }
-  | { type: 'PLAYER_WALKOVER_DECLARED'; playerId: PlayerId }
+  | {
+      type: 'PLAYER_WALKOVER_DECLARED';
+      playerId: PlayerId;
+      participantId?: string;
+      matches?: any[];
+    }
   | { type: 'STANDINGS_RESET' }
-  | { type: 'CUSTOM_THEME_ADDED'; theme: string };
+  | { type: 'CUSTOM_THEME_ADDED'; theme: string }
+  | {
+      type: 'MATCH_CLOSED_EVENT_RECEIVED';
+      matchId: string;
+      seriesId?: string;
+      match?: any;
+      bracket?: any[];
+      unblockedParticipants?: string[];
+    };
 

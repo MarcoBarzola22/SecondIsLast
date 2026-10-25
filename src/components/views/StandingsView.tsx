@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeftRight,
   Calendar,
@@ -17,10 +17,11 @@ import {
   computePlayerAwards,
   getHeadToHeadBetween,
   getSortedAnnualRanking,
+  type SortedAnnualRankingEntry,
 } from '../../domain/awardsAndRankings';
 import { formatPlayerName } from '../../domain/players';
 import { buildStandings } from '../../domain/standings';
-import type { PlayerId } from '../../domain/types';
+import type { PlayerId, PlayerStats } from '../../domain/types';
 import { useAppDispatch, useAppState } from '../../state/AppContext';
 import { DangerButton, SecondaryButton } from '../ui/Buttons';
 import { Panel } from '../ui/Panel';
@@ -34,15 +35,11 @@ export function StandingsView() {
 
   const [activeTab, setActiveTab] = useState<StandingsTab>('general');
 
-  // General Standings rows (RF-34)
-  const rows = useMemo(() => buildStandings(players, stats), [players, stats]);
-  const totalTournaments = history.length;
-
-  // Registered players mapping
-  const playersMap = useMemo(
-    () => new Map(players.map((p) => [p.id, p])),
-    [players]
-  );
+  // Server data state from /api/history/*
+  const [serverStats, setServerStats] = useState<any[] | null>(null);
+  const [serverAnnual, setServerAnnual] = useState<any[] | null>(null);
+  const [serverH2H, setServerH2H] = useState<any[] | null>(null);
+  const [serverTournaments, setServerTournaments] = useState<any[] | null>(null);
 
   // Available years for Annual Ranking
   const currentCalendarYear = new Date().getFullYear().toString();
@@ -66,12 +63,124 @@ export function StandingsView() {
     availableYears[0] ?? currentCalendarYear
   );
 
+  // Fetch from PostgreSQL /api/history/* endpoints
+  useEffect(() => {
+    let isMounted = true;
+    const fetchHistoryData = async () => {
+      try {
+        const [statsRes, annualRes, h2hRes, tourneyRes] = await Promise.all([
+          fetch('/api/history/stats', { credentials: 'include' }).catch(() => null),
+          fetch(`/api/history/annual?year=${selectedYear}`, { credentials: 'include' }).catch(() => null),
+          fetch('/api/history/h2h', { credentials: 'include' }).catch(() => null),
+          fetch('/api/history/tournaments', { credentials: 'include' }).catch(() => null),
+        ]);
+
+        if (statsRes?.ok && isMounted) {
+          const statsData = await statsRes.json();
+          setServerStats(statsData.stats ?? statsData);
+        }
+        if (annualRes?.ok && isMounted) {
+          const annualData = await annualRes.json();
+          setServerAnnual(annualData.entries ?? annualData);
+        }
+        if (h2hRes?.ok && isMounted) {
+          const h2hData = await h2hRes.json();
+          setServerH2H(h2hData.records ?? h2hData);
+        }
+        if (tourneyRes?.ok && isMounted) {
+          const tourneyData = await tourneyRes.json();
+          setServerTournaments(tourneyData.tournaments ?? tourneyData);
+        }
+      } catch {
+        // Offline / dev fallback: preserve client state
+      }
+    };
+
+    fetchHistoryData();
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedYear]);
+
+  // Registered players mapping + inclusion of server players
+  const effectivePlayers = useMemo(() => {
+    if (serverStats && serverStats.length > 0) {
+      const existingIds = new Set(players.map((p) => p.id));
+      const extraPlayers: typeof players = [];
+      serverStats.forEach((s) => {
+        if (s.player && !existingIds.has(s.playerId)) {
+          const parts = (s.player.name || '').trim().split(' ');
+          extraPlayers.push({
+            id: s.player.id,
+            firstName: parts[0] || 'Jugador',
+            lastName: parts.slice(1).join(' '),
+            createdAt: s.player.createdAt ? new Date(s.player.createdAt).toISOString() : new Date().toISOString(),
+          });
+        }
+      });
+      return [...players, ...extraPlayers];
+    }
+    return players;
+  }, [players, serverStats]);
+
+  const playersMap = useMemo(
+    () => new Map(effectivePlayers.map((p) => [p.id, p])),
+    [effectivePlayers]
+  );
+
+  // General Standings rows (RF-34)
+  const effectiveStats = useMemo(() => {
+    if (serverStats && serverStats.length > 0) {
+      const map: Record<PlayerId, PlayerStats> = {};
+      serverStats.forEach((s) => {
+        map[s.playerId] = {
+          playerId: s.playerId,
+          pts: s.points,
+          pj: s.matchesPlayed,
+          pg: s.matchesWon,
+          pp: s.matchesLost,
+          gf: s.goalsFor,
+          gc: s.goalsAgainst,
+          tj: (s.yellowCards || 0) + (s.redCards || 0),
+          yellowCards: s.yellowCards,
+          redCards: s.redCards,
+          podiums: s.podiums,
+        };
+      });
+      return map;
+    }
+    return stats;
+  }, [serverStats, stats]);
+
+  const rows = useMemo(() => buildStandings(effectivePlayers, effectiveStats), [effectivePlayers, effectiveStats]);
+  const totalTournaments = serverTournaments !== null ? serverTournaments.length : history.length;
+
   // Annual ranking for selected year (RF-78)
-  const annualEntries = useMemo(() => {
+  const annualEntries: SortedAnnualRankingEntry[] = useMemo(() => {
+    if (serverAnnual && serverAnnual.length > 0) {
+      return serverAnnual.map((entry, index) => {
+        const foundPlayer = playersMap.get(entry.playerId);
+        const displayName = entry.player?.name ?? (foundPlayer ? formatPlayerName(foundPlayer) : 'Desconocido');
+        return {
+          rank: index + 1,
+          playerId: entry.playerId,
+          displayName,
+          pts: entry.points,
+          tournamentsPlayed: entry.tournamentsPlayed,
+          championships: entry.podiums ? entry.podiums : 0,
+          runnerUps: 0,
+          thirdPlaces: 0,
+          fourthPlaces: 0,
+          podiums: entry.podiums ?? 0,
+          yellowCards: entry.yellowCards ?? 0,
+          redCards: entry.redCards ?? 0,
+        };
+      });
+    }
     const storedForYear = annualRankings?.[selectedYear];
     const computedForYear = storedForYear ?? computeAnnualRanking(history, selectedYear);
-    return getSortedAnnualRanking(computedForYear, players);
-  }, [annualRankings, selectedYear, history, players]);
+    return getSortedAnnualRanking(computedForYear, effectivePlayers);
+  }, [serverAnnual, annualRankings, selectedYear, history, effectivePlayers, playersMap]);
 
   // H2H state (RF-76)
   const [h2hPlayerA, setH2hPlayerA] = useState<PlayerId>(players[0]?.id ?? '');
@@ -82,12 +191,33 @@ export function StandingsView() {
     setH2hPlayerB(h2hPlayerA);
   };
 
+  const effectiveH2H = useMemo(() => {
+    if (serverH2H && serverH2H.length > 0) {
+      const map: Record<string, any> = {};
+      serverH2H.forEach((r) => {
+        const key = `${r.playerAId}__vs__${r.playerBId}`;
+        map[key] = {
+          playerA: r.playerAId,
+          playerB: r.playerBId,
+          matchesPlayed: r.matchesPlayed,
+          winsA: r.winsA,
+          winsB: r.winsB,
+          draws: r.draws,
+          goalsA: r.goalsA,
+          goalsB: r.goalsB,
+        };
+      });
+      return map;
+    }
+    return headToHead;
+  }, [serverH2H, headToHead]);
+
   const h2hRecord = useMemo(() => {
     if (!h2hPlayerA || !h2hPlayerB || h2hPlayerA === h2hPlayerB) {
       return null;
     }
-    return getHeadToHeadBetween(headToHead, h2hPlayerA, h2hPlayerB);
-  }, [headToHead, h2hPlayerA, h2hPlayerB]);
+    return getHeadToHeadBetween(effectiveH2H, h2hPlayerA, h2hPlayerB);
+  }, [effectiveH2H, h2hPlayerA, h2hPlayerB]);
 
   // Awards Leaderboard (RF-77)
   const activeMatches = useMemo(() => {
@@ -100,8 +230,8 @@ export function StandingsView() {
   }, [activeTournament]);
 
   const awards = useMemo(() => {
-    return computePlayerAwards(players, activeMatches, history, stats);
-  }, [players, activeMatches, history, stats]);
+    return computePlayerAwards(effectivePlayers, activeMatches, history, effectiveStats);
+  }, [effectivePlayers, activeMatches, history, effectiveStats]);
 
   const handleResetHistory = () => {
     const confirmed = window.confirm(

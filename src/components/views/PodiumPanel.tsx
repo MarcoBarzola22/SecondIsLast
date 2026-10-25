@@ -1,4 +1,5 @@
-import { Award, ChevronRight, Medal, Trophy } from 'lucide-react';
+import { useState } from 'react';
+import { Award, ChevronRight, Loader2, Medal, Trophy } from 'lucide-react';
 import { formatPlayerName } from '../../domain/players';
 import { isBracketComplete } from '../../domain/series';
 import { getPodium } from '../../domain/standings';
@@ -6,6 +7,7 @@ import {
   getDoubleEliminationPodium,
   isDoubleEliminationComplete,
 } from '../../domain/doubleElimination';
+import { getTournamentPointsDistribution } from '../../domain/awardsAndRankings';
 import type { Podium } from '../../domain/types';
 import { useAppDispatch, useAppState } from '../../state/AppContext';
 import { PrimaryButton } from '../ui/Buttons';
@@ -74,14 +76,38 @@ export function PodiumPanel({ onTournamentFinished }: PodiumPanelProps) {
   const thirdTeam = teams[podium.third] ?? '—';
   const fourthTeam = teams[podium.fourth] ?? '—';
 
-  const handleFinish = () => {
-    dispatch({
-      type: 'TOURNAMENT_FINISHED',
-      summaryId: crypto.randomUUID(),
-      now: new Date().toISOString(),
-    });
+  const participantCount =
+    (activeTournament as any).participants?.length ??
+    activeTournament.participantIds?.length ??
+    4;
+  const points = getTournamentPointsDistribution(participantCount);
 
-    onTournamentFinished();
+  const [isFinishing, setIsFinishing] = useState(false);
+
+  const handleFinish = async () => {
+    setIsFinishing(true);
+    try {
+      if (activeTournament.id) {
+        await fetch(`/api/history/tournaments/${activeTournament.id}/finish`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          credentials: 'include',
+        });
+      }
+    } catch (err) {
+      console.warn('[PodiumPanel] Error finalizando torneo en servidor, continuando con guardado local:', err);
+    } finally {
+      dispatch({
+        type: 'TOURNAMENT_FINISHED',
+        summaryId: crypto.randomUUID(),
+        now: new Date().toISOString(),
+      });
+      setIsFinishing(false);
+      onTournamentFinished();
+    }
   };
 
   return (
@@ -96,7 +122,7 @@ export function PodiumPanel({ onTournamentFinished }: PodiumPanelProps) {
           <div className="flex flex-col items-center">
             <Trophy className="h-10 w-10 text-primary glow-green" />
             <span className="mt-2 font-display text-xs font-black uppercase tracking-widest text-primary">
-              Campeón (+10 PTS)
+              Campeón (+{points.champion} PTS)
             </span>
             <p className="mt-2 text-lg font-bold text-foreground">{champName}</p>
             <p className="text-xs text-muted-foreground">{champTeam}</p>
@@ -108,7 +134,7 @@ export function PodiumPanel({ onTournamentFinished }: PodiumPanelProps) {
           <div className="flex flex-col items-center">
             <Medal className="h-10 w-10 text-accent glow-blue" />
             <span className="mt-2 font-display text-xs font-black uppercase tracking-widest text-accent">
-              Subcampeón (+7 PTS)
+              Subcampeón (+{points.runnerUp} PTS)
             </span>
             <p className="mt-2 text-lg font-bold text-foreground">{runnerName}</p>
             <p className="text-xs text-muted-foreground">{runnerTeam}</p>
@@ -123,7 +149,7 @@ export function PodiumPanel({ onTournamentFinished }: PodiumPanelProps) {
           <div className="flex flex-col items-center">
             <Award className="h-9 w-9 text-gold" />
             <span className="mt-2 font-display text-xs font-black uppercase tracking-widest text-gold">
-              3er Puesto (+5 PTS)
+              3er Puesto (+{points.third} PTS)
             </span>
             <p className="mt-2 text-lg font-bold text-foreground">{thirdName}</p>
             <p className="text-xs text-muted-foreground">{thirdTeam}</p>
@@ -135,7 +161,7 @@ export function PodiumPanel({ onTournamentFinished }: PodiumPanelProps) {
           <div className="flex flex-col items-center">
             <Award className="h-9 w-9 text-muted-foreground" />
             <span className="mt-2 font-display text-xs font-black uppercase tracking-widest text-muted-foreground">
-              4to Puesto (+3 PTS)
+              4to Puesto (+{points.fourth} PTS)
             </span>
             <p className="mt-2 text-lg font-bold text-foreground">{fourthName}</p>
             <p className="text-xs text-muted-foreground">{fourthTeam}</p>
@@ -148,8 +174,16 @@ export function PodiumPanel({ onTournamentFinished }: PodiumPanelProps) {
           Al finalizar, se guardará el resumen en el historial y se sumarán los puntos y estadísticas a la tabla histórica.
         </p>
 
-        <PrimaryButton onClick={handleFinish} className="px-8 py-3.5">
-          Finalizar Torneo y Ver Tabla <ChevronRight className="h-4 w-4" />
+        <PrimaryButton onClick={handleFinish} disabled={isFinishing} className="px-8 py-3.5">
+          {isFinishing ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Finalizando...
+            </>
+          ) : (
+            <>
+              Finalizar Torneo y Ver Tabla <ChevronRight className="h-4 w-4" />
+            </>
+          )}
         </PrimaryButton>
       </div>
     </Panel>

@@ -1,3 +1,5 @@
+import type { MatchState } from './handshake';
+
 export type PlayerId = string;
 
 export interface Player {
@@ -107,6 +109,9 @@ export interface Series {
   loserTo: SlotTarget | null; // Next series slot for the loser (only SF -> TP)
   winner?: PlayerId | null;
   loser?: PlayerId | null;
+  isBye?: boolean;
+  status?: 'PENDING_SUBMISSION' | 'PENDING_CONFIRMATION' | 'CLOSED';
+  version?: number;
 }
 
 export type TournamentType =
@@ -126,6 +131,8 @@ export interface LeagueMatch {
   cardsA?: CardCounts;
   cardsB?: CardCounts;
   confirmed: boolean;
+  status?: 'PENDING_SUBMISSION' | 'PENDING_CONFIRMATION' | 'CLOSED';
+  version?: number;
 }
 
 export type GroupId = 'A' | 'B' | 'C';
@@ -184,6 +191,7 @@ export interface ActiveTournament {
   groups?: Partial<Record<GroupId, PlayerId[]>>; // Group participants mapping for group_stage
   groupMatches?: GroupMatch[]; // Matches for group_stage
   walkoverPlayerIds?: PlayerId[]; // Players who abandoned the tournament (RF-64, RF-65)
+  matches?: MatchState[]; // Handshake matches for multiplayer tournament
 }
 
 export interface Podium {

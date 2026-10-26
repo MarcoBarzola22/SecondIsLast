@@ -301,15 +301,15 @@ describe('voting domain logic', () => {
       expect(hasAllParticipantsVoted(5, 4)).toBe(true);
     });
 
-    it('shouldCloseVoting returns true when 120s timer expires or 100% of participants voted (RF-100)', () => {
-      expect(VOTING_DURATION_SECONDS).toBe(120);
+    it('shouldCloseVoting returns true when 60s timer expires or 100% of participants voted (RF-100)', () => {
+      expect(VOTING_DURATION_SECONDS).toBe(60);
 
       // Neither condition met
       expect(shouldCloseVoting(2, 4, 30)).toBe(false);
 
-      // Condition 1: Time expired (>= 120s) even with fewer votes
-      expect(shouldCloseVoting(1, 4, 120)).toBe(true);
-      expect(shouldCloseVoting(0, 4, 121)).toBe(true);
+      // Condition 1: Time expired (>= 60s) even with fewer votes
+      expect(shouldCloseVoting(1, 4, 60)).toBe(true);
+      expect(shouldCloseVoting(0, 4, 61)).toBe(true);
 
       // Condition 2: 100% voted even before time expired
       expect(shouldCloseVoting(4, 4, 15)).toBe(true);

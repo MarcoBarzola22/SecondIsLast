@@ -43,6 +43,14 @@ export function getActiveVotingSession(tournamentId: string): ActiveVotingSessio
   return activeVotingSessions.get(tournamentId) || null;
 }
 
+export function cancelVotingSession(tournamentId: string): void {
+  const session = activeVotingSessions.get(tournamentId);
+  if (session?.timer) {
+    clearTimeout(session.timer);
+  }
+  activeVotingSessions.delete(tournamentId);
+}
+
 /**
  * Maps a lowercase domain tournament format string to the Prisma TournamentFormat enum.
  */
@@ -74,7 +82,7 @@ export function startVotingSession(
   phase: 'FORMAT' | 'THEME',
   options: string[],
   totalVoters: number,
-  durationSeconds: number = 120,
+  durationSeconds: number = 60,
   prisma = defaultPrisma
 ): ActiveVotingSession {
   // Clear any existing active session timer for this tournament
@@ -218,6 +226,7 @@ export async function closeVotingSession(
       data: {
         format: prismaFormat,
         matchFormat: winnerMatchFormat as any,
+        status: 'VOTING_THEME',
       },
     });
   } else if (session.phase === 'THEME') {
@@ -243,6 +252,12 @@ export async function closeVotingSession(
 
   if (io) {
     io.to(`tournament:${tournamentId}`).emit('vote:ended', payload);
+    if (session.phase === 'FORMAT') {
+      io.to(`tournament:${tournamentId}`).emit('tournament:status', {
+        status: 'VOTING_THEME',
+        tournamentId,
+      });
+    }
   }
 
   return payload;

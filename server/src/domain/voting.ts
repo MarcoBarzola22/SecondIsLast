@@ -1,6 +1,6 @@
 export const MIN_PARTICIPANTS = 4;
 export const MAX_PARTICIPANTS = 10;
-export const VOTING_DURATION_SECONDS = 120;
+export const VOTING_DURATION_SECONDS = 60;
 
 export type TournamentType =
   | 'bracket'

@@ -3,7 +3,7 @@ import type { TournamentType } from './types';
 
 export const MIN_PARTICIPANTS = 4;
 export const MAX_PARTICIPANTS = 10;
-export const VOTING_DURATION_SECONDS = 120;
+export const VOTING_DURATION_SECONDS = 60;
 
 export const BASE_TOURNAMENT_FORMATS: readonly TournamentType[] = [
   'bracket',

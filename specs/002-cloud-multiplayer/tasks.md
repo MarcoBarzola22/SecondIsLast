@@ -167,3 +167,15 @@
   - Cubre: RF-96, RF-97, RF-99, RF-100, RF-105, RF-119, RNF-1.  
   - Hecho cuando: 4 o más clientes conectados en simultáneo transicionan juntos de Lobby a Votación de Formato, el cronómetro de 120s se ve en vivo en todos los navegadores, y el servidor no colapsa ante reconexiones.
 
+- [x] **T29 · Hotfix: Cronómetros de 60s, Auto-Recuperación de Sesión en Voto, Cierre con Abstenciones y Navegación Inteligente**  
+  Eliminación de la pestaña legacy Registro en Header y App (vista inicial por defecto siempre en Lobby), navegación inteligente que redirige al paso activo del torneo al volver de Reglamento o Tabla, reducción de todos los cronómetros de 120s a 60 segundos, auto-reconstrucción de sesiones de votación en memoria ante reinicios de `tsx watch` evitando errores 400 Bad Request, rehidratación de `myVote` en VotingView, y cierre garantizado e idempotente a los 60s contabilizando votos con abstenciones y avanzando el torneo a `VOTING_THEME`.  
+  - Cubre: RF-96, RF-97, RF-98, RF-99, RF-100, RF-101, RF-102, RF-119.  
+  - Hecho cuando: Todos los cronómetros cuentan 60s, los votos se emiten y recuperan sin error 400, la votación se cierra al llegar a cero avanzando automáticamente a todos los clientes, y navegar por el Header siempre devuelve al torneo activo.
+
+- [x] **T30 · Hotfix Rápido: Endpoint /api/tournaments/abandon, Limpieza en DB y Botón Global en Header**  
+  Creación del endpoint `POST /api/tournaments/abandon` en `tournaments.ts` y `tournamentService.ts` accesible para el Administrador o participantes confirmados, pasando el torneo activo a estado `ABANDONED` en PostgreSQL, limpiando sesiones y cronómetros de memoria (`cancelLobbyTimer`, `cancelVotingSession`), y emitiendo el evento WebSocket `tournament:abandoned` y `tournament:status` (`ABANDONED`) a todos los clientes. Actualización de `Header.tsx` para mostrar el botón rojo "Abandonar / Reiniciar" ante cualquier torneo activo en la nube o local (incluso en `LOBBY` o `VOTING_FORMAT`), limpiando la caché offline (`saveOfflineTournament(null)`), y sincronizando a todos los clientes en `App.tsx` para regresar al Lobby limpio. Limpieza directa ejecutada sobre torneos trabados en la base de datos PostgreSQL.  
+  - Cubre: RF-97, RF-98, RF-119, RF-120.  
+  - Hecho cuando: El torneo trabado pasa a `ABANDONED`, el botón de reiniciar está visible y operativo en cualquier fase, el endpoint cancela timers y sesiones, y todos los navegadores regresan instantáneamente al Lobby sin datos residuales.
+
+
+

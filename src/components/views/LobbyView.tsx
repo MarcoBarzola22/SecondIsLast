@@ -64,7 +64,7 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
   const [newLobbyName, setNewLobbyName] = useState<string>('');
   const [lobbyExpiresAt, setLobbyExpiresAt] = useState<string | null>(null);
 
-  const countdown = useCountdown(lobbyExpiresAt, 120);
+  const countdown = useCountdown(lobbyExpiresAt, 60);
 
   // Fetch active tournament status from server
   const fetchActiveTournament = useCallback(async () => {
@@ -86,6 +86,15 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
 
       const data = await res.json();
       if (data.tournament) {
+        if (
+          data.tournament.status === 'VOTING_FORMAT' ||
+          data.tournament.status === 'VOTING_THEME' ||
+          data.tournament.status === 'IN_PROGRESS'
+        ) {
+          onProceedToVoting?.();
+          return;
+        }
+
         setTournament(data.tournament);
         const parts = data.tournament.participants || [];
         setParticipants(parts);

@@ -46,7 +46,7 @@ export function broadcastLobbyUpdated(
   io: AppSocketServer | null,
   tournamentId: string,
   participants: any[],
-  durationSeconds: number = 120
+  durationSeconds: number = 60
 ): LobbyUpdatedPayload {
   const count = participants.length;
   const canStart = count >= 4;
@@ -91,7 +91,7 @@ export function broadcastLobbyUpdated(
               'FORMAT',
               options,
               tournament.participants.length,
-              120
+              60
             );
 
             if (io) {

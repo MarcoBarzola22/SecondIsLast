@@ -17,6 +17,7 @@ import { getTournamentPointsDistribution } from '../../domain/awardsAndRankings'
 import { useAppDispatch, useAppState } from '../../state/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { useNetworkStatus } from '../../hooks/useNetworkStatus';
+import { saveOfflineTournament } from '../../cache/offlineStore';
 import { DangerButton } from '../ui/Buttons';
 import { WhitelistModal } from '../views/WhitelistModal';
 
@@ -37,9 +38,10 @@ export type ViewType =
 interface HeaderProps {
   currentView: ViewType;
   onNavigate: (view: ViewType) => void;
+  cloudTournament?: any;
 }
 
-export function Header({ currentView, onNavigate }: HeaderProps) {
+export function Header({ currentView, onNavigate, cloudTournament }: HeaderProps) {
   const { activeTournament } = useAppState();
   const dispatch = useAppDispatch();
   const { user, displayName, isAdmin, isLoading, loginWithGoogle, devLogin, logout } = useAuth();
@@ -86,9 +88,9 @@ export function Header({ currentView, onNavigate }: HeaderProps) {
     label: string;
     icon: typeof Users;
   }> = [
-    { id: 'registro', label: 'Registro', icon: Users },
-    { id: 'tematica', label: 'Temática', icon: Dices },
-    { id: 'draft', label: 'Draft', icon: Shuffle },
+    { id: 'lobby', label: 'Lobby', icon: Users },
+    { id: 'votacion', label: 'Votación', icon: Dices },
+    { id: 'equipos', label: 'Temática / Equipos', icon: Shuffle },
     {
       id: competitionStepId,
       label: competitionStepLabel,
@@ -97,14 +99,26 @@ export function Header({ currentView, onNavigate }: HeaderProps) {
     { id: 'tabla', label: 'Tabla', icon: ListOrdered },
   ];
 
-  const handleAbandon = () => {
+  const handleAbandon = async () => {
     const confirmed = window.confirm(
-      '¿Seguro que querés abandonar el torneo activo? Los datos de este torneo se descartarán, pero la tabla histórica y los jugadores se mantienen intactos.'
+      '¿Seguro que querés abandonar o reiniciar el torneo activo? Los datos de este torneo se descartarán y todos los clientes volverán al Lobby.'
     );
-    if (confirmed) {
-      dispatch({ type: 'TOURNAMENT_ABANDONED' });
-      onNavigate('registro');
+    if (!confirmed) return;
+
+    try {
+      await fetch('/api/tournaments/abandon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ tournamentId: cloudTournament?.id || activeTournament?.id }),
+      });
+    } catch (err) {
+      console.warn('[Header] Error abandonando torneo en servidor:', err);
     }
+
+    saveOfflineTournament(null);
+    dispatch({ type: 'TOURNAMENT_ABANDONED' });
+    onNavigate('lobby');
   };
 
   const isStepEnabled = (stepId: ViewType): boolean => {
@@ -116,14 +130,12 @@ export function Header({ currentView, onNavigate }: HeaderProps) {
       stepId === 'reglamento'
     )
       return true;
-    // Registro is always accessible to view or register players
-    if (stepId === 'registro') return true;
 
     if (!activeTournament) {
       return false;
     }
 
-    if (stepId === 'tematica') {
+    if (stepId === 'equipos' || stepId === 'tematica') {
       return (
         activeTournament.phase === 'theme' ||
         activeTournament.phase === 'draft' ||
@@ -399,7 +411,11 @@ export function Header({ currentView, onNavigate }: HeaderProps) {
 
           <nav className="flex flex-wrap justify-center gap-1">
             {steps.map((s, i) => {
-              const active = s.id === currentView;
+              const active =
+                s.id === currentView ||
+                (s.id === 'equipos' && (currentView === 'tematica' || currentView === 'draft')) ||
+                (s.id === competitionStepId &&
+                  ['bracket', 'league', 'group_stage', 'double_elimination'].includes(currentView));
               const enabled = isStepEnabled(s.id);
 
               return (
@@ -424,10 +440,10 @@ export function Header({ currentView, onNavigate }: HeaderProps) {
             })}
           </nav>
 
-          {activeTournament && (
-            <DangerButton onClick={handleAbandon} title="Abandonar torneo actual">
+          {(cloudTournament || activeTournament) && (
+            <DangerButton onClick={handleAbandon} title="Abandonar o reiniciar torneo activo">
               <LogOut className="h-3.5 w-3.5" />
-              <span className="hidden lg:inline">Abandonar</span>
+              <span className="hidden lg:inline">Abandonar / Reiniciar</span>
             </DangerButton>
           )}
         </div>

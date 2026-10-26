@@ -38,6 +38,7 @@ export const ACTIVE_TOURNAMENT_STATUSES: TournamentStatus[] = [
   TournamentStatus.VOTING_THEME,
   TournamentStatus.IN_PROGRESS,
 ];
+export const ACTIVE_STATUSES_AS_ARRAY = ACTIVE_TOURNAMENT_STATUSES;
 
 export interface ActiveTournamentResult extends Tournament {
   participants: (TournamentParticipant & { player: any })[];
@@ -1071,12 +1072,57 @@ export class TournamentService {
       }
     }
   }
+
+  /**
+   * Abandons an active tournament, transitioning its status to ABANDONED (T30).
+   * Allowed for Admin or any confirmed participant of the tournament.
+   */
+  async abandonTournament(user: AuthUser, tournamentId?: string): Promise<{ tournament: Tournament }> {
+    let tournament: (Tournament & { participants: TournamentParticipant[] }) | null = null;
+
+    if (tournamentId) {
+      tournament = await this.prisma.tournament.findUnique({
+        where: { id: tournamentId },
+        include: { participants: true },
+      });
+    } else {
+      tournament = await this.prisma.tournament.findFirst({
+        where: {
+          status: { in: ACTIVE_STATUSES_AS_ARRAY },
+        },
+        include: { participants: true },
+      });
+    }
+
+    if (!tournament) {
+      throw new NotFoundError('No se encontró ningún torneo activo para abandonar.');
+    }
+
+    if (tournament.status === TournamentStatus.ABANDONED) {
+      return { tournament };
+    }
+
+    // Must be Admin or a confirmed participant
+    const isParticipant = tournament.participants.some(
+      (p) => Boolean(user.playerId && p.playerId === user.playerId && (p.isPresent ?? true))
+    );
+    const isAdmin = user.role === Role.ADMIN;
+
+    if (!isAdmin && !isParticipant) {
+      throw new ForbiddenError('Solo un participante o un administrador puede abandonar el torneo.');
+    }
+
+    const updated = await this.prisma.tournament.update({
+      where: { id: tournament.id },
+      data: { status: TournamentStatus.ABANDONED },
+    });
+
+    return { tournament: updated };
+  }
 }
 
 // In-memory custom preloaded teams map: theme -> teams[]
 const customPreloadedTeams = new Map<string, string[]>();
-
-const ACTIVE_STATUSES_AS_ARRAY = ACTIVE_TOURNAMENT_STATUSES;
 
 export const tournamentService = new TournamentService();
 

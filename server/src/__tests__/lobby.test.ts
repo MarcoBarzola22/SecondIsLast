@@ -534,6 +534,73 @@ describe('Lobby, Presence & Quorum API and WebSocket Events (T13 · RF-93 to RF-
         service.removeParticipant('part-1', player1 as any)
       ).rejects.toThrow(ForbiddenError);
     });
+
+    it('abandonTournament marks active tournament as ABANDONED in DB (T30)', async () => {
+      const mockPrisma: any = {
+        tournament: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 't-active',
+            status: TournamentStatus.VOTING_FORMAT,
+            participants: [{ playerId: 'player-admin' }],
+          }),
+          update: vi.fn().mockResolvedValue({
+            id: 't-active',
+            status: TournamentStatus.ABANDONED,
+          }),
+        },
+      };
+
+      const { TournamentService } = await import('../services/tournamentService.js');
+      const service = new TournamentService(mockPrisma);
+
+      const res = await service.abandonTournament(adminUser as any);
+      expect(mockPrisma.tournament.update).toHaveBeenCalledWith({
+        where: { id: 't-active' },
+        data: { status: TournamentStatus.ABANDONED },
+      });
+      expect(res.tournament.status).toBe(TournamentStatus.ABANDONED);
+    });
+
+    it('abandonTournament throws ForbiddenError if caller is neither admin nor participant (T30)', async () => {
+      const mockPrisma: any = {
+        tournament: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 't-active',
+            status: TournamentStatus.VOTING_FORMAT,
+            participants: [{ playerId: 'player-other' }],
+          }),
+        },
+      };
+
+      const { TournamentService, ForbiddenError } = await import('../services/tournamentService.js');
+      const service = new TournamentService(mockPrisma);
+
+      const randomPlayer = { ...player1, playerId: 'player-random' };
+      await expect(service.abandonTournament(randomPlayer as any)).rejects.toThrow(ForbiddenError);
+    });
+  });
+
+  describe('POST /api/tournaments/abandon (T30)', () => {
+    it('abandons active tournament and returns 200 with status ABANDONED', async () => {
+      const tourneyId = 'tourney-abandon-1';
+      const abandonedTournament = {
+        id: tourneyId,
+        status: TournamentStatus.ABANDONED,
+      };
+
+      vi.spyOn(tournamentService, 'abandonTournament').mockResolvedValue({ tournament: abandonedTournament } as any);
+
+      const token = createToken(adminUser);
+      const res = await request(app)
+        .post('/api/tournaments/abandon')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ tournamentId: tourneyId });
+
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.tournament.status).toBe(TournamentStatus.ABANDONED);
+    });
   });
 });
+
 

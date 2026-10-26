@@ -14,8 +14,11 @@ import {
   broadcastVoteUpdated,
   closeVotingSession,
   getActiveVotingSession,
+  cancelVotingSession,
 } from '../sockets/votingHandler.js';
 import { getSocketServer } from '../sockets/index.js';
+import { prisma } from '../db.js';
+import { getFormatVotingOptions } from '../domain/voting.js';
 
 const router = Router();
 
@@ -32,7 +35,7 @@ function getIO(req: Request) {
  * Retrieves the currently active tournament (LOBBY, VOTING_FORMAT, VOTING_THEME, IN_PROGRESS)
  * or null if no tournament is in progress (RF-97).
  */
-router.get('/active', async (_req: Request, res: Response) => {
+router.get('/active', async (req: Request, res: Response) => {
   try {
     const tournament = await tournamentService.getActiveTournament();
     if (!tournament) {
@@ -52,14 +55,47 @@ router.get('/active', async (_req: Request, res: Response) => {
           }
         : null;
 
+    let myVote: string | null = null;
+    let myMatchFormat: string | null = null;
+    const user = req.user;
+    if (user && tournament.participants) {
+      const userParticipant = tournament.participants.find(
+        (p: any) =>
+          p.userId === user.id ||
+          (user.playerId && p.playerId === user.playerId)
+      );
+      if (userParticipant) {
+        const activePhase = (votingSessionData?.phase ||
+          (tournament.status === 'VOTING_FORMAT' ? 'FORMAT' : 'THEME')) as any;
+        const existingVote = await prisma.tournamentVote.findFirst({
+          where: {
+            tournamentId: tournament.id,
+            participantId: userParticipant.id,
+            phase: activePhase,
+          },
+        });
+        if (existingVote) {
+          myVote = existingVote.choice;
+        }
+        const settings = (tournament.settings as any) || {};
+        if (settings.matchFormatVotes && settings.matchFormatVotes[userParticipant.id]) {
+          myMatchFormat = settings.matchFormatVotes[userParticipant.id];
+        }
+      }
+    }
+
     res.status(200).json({
       tournament: {
         ...tournament,
         lobbyExpiresAt,
         votingSession: votingSessionData,
+        myVote,
+        myMatchFormat,
       },
       lobbyExpiresAt,
       votingSession: votingSessionData,
+      myVote,
+      myMatchFormat,
     });
   } catch (error: any) {
     res.status(500).json({ error: 'Error interno al consultar el torneo activo.' });
@@ -82,6 +118,66 @@ router.post('/lobby', async (req: Request, res: Response) => {
       return;
     }
     res.status(500).json({ error: 'Error interno al crear el lobby del torneo.' });
+  }
+});
+
+/**
+ * POST /api/tournaments/abandon
+ * Abandons the currently active tournament (LOBBY, VOTING_FORMAT, VOTING_THEME, IN_PROGRESS).
+ * Allowed for Admin or confirmed participants (T30).
+ * Clears active timers/sessions in memory and broadcasts tournament:abandoned and tournament:status (ABANDONED).
+ */
+router.post('/abandon', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { tournamentId } = req.body || {};
+    const result = await tournamentService.abandonTournament(user, tournamentId);
+    const tournament = (result as any).tournament || result;
+
+    // Cancel lobby and voting in-memory sessions/timers
+    cancelLobbyTimer(tournament.id);
+    cancelVotingSession(tournament.id);
+
+    // Broadcast WebSocket events to all clients
+    const io = getIO(req);
+    if (io) {
+      io.to(`tournament:${tournament.id}`).emit('tournament:abandoned', {
+        tournamentId: tournament.id,
+        abandonedBy: {
+          id: user.id,
+          name: user.name,
+          role: user.role,
+        },
+      });
+      io.to(`tournament:${tournament.id}`).emit('tournament:status', {
+        tournamentId: tournament.id,
+        status: 'ABANDONED',
+      });
+      io.emit('tournament:abandoned', {
+        tournamentId: tournament.id,
+        abandonedBy: {
+          id: user.id,
+          name: user.name,
+          role: user.role,
+        },
+      });
+      io.emit('tournament:status', {
+        tournamentId: tournament.id,
+        status: 'ABANDONED',
+      });
+    }
+
+    res.status(200).json({ ok: true, tournament });
+  } catch (error: any) {
+    if (error instanceof ForbiddenError || error.statusCode === 403) {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+    if (error instanceof NotFoundError || error.statusCode === 404) {
+      res.status(404).json({ error: error.message });
+      return;
+    }
+    res.status(500).json({ error: error.message || 'Error interno al abandonar el torneo.' });
   }
 });
 
@@ -200,14 +296,14 @@ router.post('/start-voting', async (req: Request, res: Response) => {
 
     cancelLobbyTimer(result.tournament.id);
 
-    // Start 120s countdown session and broadcast vote:started
+    // Start 60s countdown session and broadcast vote:started
     const session = startVotingSession(
       io,
       result.tournament.id,
       result.phase,
       result.options,
       result.totalVoters,
-      120
+      60
     );
 
     if (io) {
@@ -269,14 +365,50 @@ router.post('/vote', async (req: Request, res: Response) => {
       return;
     }
 
-    const session = getActiveVotingSession(targetTourneyId);
+    let session = getActiveVotingSession(targetTourneyId);
     if (!session || session.closed || session.phase !== votePhase) {
-      res.status(400).json({ error: 'La sesión de votación ha finalizado o no es válida.' });
-      return;
+      // Hotfix T29: Auto-reconstruct active voting session if lost in memory
+      const tourneyInDb = await prisma.tournament.findUnique({
+        where: { id: targetTourneyId },
+        include: {
+          participants: {
+            where: { isPresent: true },
+          },
+        },
+      });
+
+      const isValidStatus =
+        tourneyInDb &&
+        ((votePhase === 'FORMAT' && tourneyInDb.status === 'VOTING_FORMAT') ||
+          (votePhase === 'THEME' && tourneyInDb.status === 'VOTING_THEME'));
+
+      if (isValidStatus) {
+        const io = getIO(req);
+        const options =
+          votePhase === 'FORMAT'
+            ? getFormatVotingOptions(tourneyInDb.participants.length)
+            : ['clasicos', 'selecciones', 'champions', 'libertadores'];
+
+        session = startVotingSession(
+          io,
+          targetTourneyId,
+          votePhase,
+          options,
+          tourneyInDb.participants.length,
+          60
+        );
+      } else {
+        res.status(400).json({ error: 'La sesión de votación ha finalizado o no es válida.' });
+        return;
+      }
     }
 
-    // Validate choice is one of the valid options (RF-99)
-    if (!session.options.includes(choice.toLowerCase()) && !session.options.includes(choice)) {
+    // Validate choice is one of the valid options (RF-99), case-insensitive check
+    const isChoiceValid = session.options.some(
+      (opt) => opt.toLowerCase() === choice.toLowerCase()
+    );
+
+    if (!isChoiceValid) {
       res.status(400).json({ error: `La opción "${choice}" no es válida para esta votación.` });
       return;
     }
@@ -324,6 +456,42 @@ router.post('/vote', async (req: Request, res: Response) => {
       return;
     }
     res.status(500).json({ error: 'Error interno al registrar el voto.' });
+  }
+});
+
+/**
+ * POST /api/tournaments/close-voting
+ * Idempotently closes active voting session on countdown expiration (T29 fallback).
+ */
+router.post('/close-voting', async (req: Request, res: Response) => {
+  try {
+    const { tournamentId } = req.body || {};
+    let targetTourneyId = tournamentId;
+    if (!targetTourneyId) {
+      const active = await tournamentService.getActiveTournament();
+      targetTourneyId = active?.id;
+    }
+
+    if (!targetTourneyId) {
+      res.status(200).json({ ok: true, message: 'No hay torneo activo para cerrar votación.' });
+      return;
+    }
+
+    const io = getIO(req);
+    const session = getActiveVotingSession(targetTourneyId);
+    if (!session || session.closed) {
+      res.status(200).json({ ok: true, message: 'La sesión de votación ya está cerrada.' });
+      return;
+    }
+
+    const result = await closeVotingSession(io, targetTourneyId, 'TIMEOUT');
+    res.status(200).json({
+      ok: true,
+      message: 'Votación cerrada exitosamente.',
+      result,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Error al cerrar la sesión de votación.' });
   }
 });
 
@@ -520,6 +688,57 @@ router.post('/participants/:id/walkover', async (req: Request, res: Response) =>
     }
     console.error('[walkover error]:', error);
     res.status(500).json({ error: error.message || 'Error interno al registrar walkover.' });
+  }
+});
+
+/**
+ * POST /api/tournaments/abandon
+ * Abandons active tournament and cancels active timers/sessions (T30).
+ * Broadcasts tournament:abandoned via WebSockets.
+ */
+router.post('/abandon', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { tournamentId } = req.body || {};
+
+    const result = await tournamentService.abandonTournament(user, tournamentId);
+    const io = getIO(req);
+
+    // Cancel lobby and voting timers/sessions in memory
+    cancelLobbyTimer(result.tournament.id);
+    cancelVotingSession(result.tournament.id);
+
+    if (io) {
+      const payload = {
+        tournamentId: result.tournament.id,
+        abandonedBy: user.name,
+      };
+      io.to(`tournament:${result.tournament.id}`).emit('tournament:abandoned', payload);
+      io.emit('tournament:abandoned', payload);
+      io.to(`tournament:${result.tournament.id}`).emit('tournament:status', {
+        status: 'ABANDONED',
+        tournamentId: result.tournament.id,
+      });
+      io.emit('tournament:status', {
+        status: 'ABANDONED',
+        tournamentId: result.tournament.id,
+      });
+    }
+
+    res.status(200).json({
+      message: 'Torneo abandonado y reiniciado exitosamente.',
+      tournament: result.tournament,
+    });
+  } catch (error: any) {
+    if (error instanceof NotFoundError || error.statusCode === 404) {
+      res.status(404).json({ error: error.message });
+      return;
+    }
+    if (error instanceof ForbiddenError || error.statusCode === 403) {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+    res.status(500).json({ error: error.message || 'Error interno al abandonar el torneo.' });
   }
 });
 

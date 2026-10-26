@@ -28,7 +28,7 @@ export default function App() {
   const { isOnline } = useNetworkStatus();
   const [liveHandshakeMatch, setLiveHandshakeMatch] = useState<HandshakeMatchData | null>(null);
 
-  // Derive initial active view from persistent tournament phase (RF-40)
+  // Derive initial active view from persistent tournament phase (RF-40) - default is always 'lobby' (T29)
   const [view, setView] = useState<ViewType>(() => {
     if (activeTournament) {
       if (activeTournament.phase === 'theme') return 'tematica';
@@ -39,7 +39,7 @@ export default function App() {
       if (activeTournament.phase === 'group_playoffs') return 'bracket';
       if (activeTournament.phase === 'double_elimination') return 'double_elimination';
     }
-    return 'registro';
+    return 'lobby';
   });
 
   const [activeTournamentId, setActiveTournamentId] = useState<string | undefined>(activeTournament?.id);
@@ -50,6 +50,48 @@ export default function App() {
     phase: 'FORMAT' | 'THEME';
     totalVoters: number;
   } | null>(null);
+
+  // Derive real active tournament view according to status (T29)
+  const getActiveTournamentView = useCallback((): ViewType => {
+    const tourney = cloudTournament || activeTournament;
+    if (!tourney) return 'lobby';
+
+    const status = tourney.status;
+    if (status === 'LOBBY') return 'lobby';
+    if (status === 'VOTING_FORMAT') return 'votacion';
+    if (status === 'VOTING_THEME') return 'equipos';
+    if (status === 'IN_PROGRESS') {
+      const format = (tourney.format || tourney.tournamentType || '').toLowerCase();
+      if (format === 'league' || format === 'league_playoffs') return 'league';
+      if (format === 'group_stage') return 'group_stage';
+      if (format === 'double_elimination') return 'double_elimination';
+      return 'bracket';
+    }
+
+    if (activeTournament) {
+      if (activeTournament.phase === 'theme') return 'tematica';
+      if (activeTournament.phase === 'draft') return 'draft';
+      if (activeTournament.phase === 'bracket') return 'bracket';
+      if (activeTournament.phase === 'league') return 'league';
+      if (activeTournament.phase === 'group_stage') return 'group_stage';
+      if (activeTournament.phase === 'double_elimination') return 'double_elimination';
+    }
+
+    return 'lobby';
+  }, [cloudTournament, activeTournament]);
+
+  // Intelligent navigation handler when returning from Reglamento or Tabla (T29)
+  const handleNavigate = useCallback(
+    (targetView: ViewType) => {
+      if (targetView === 'lobby') {
+        const activeStepView = getActiveTournamentView();
+        setView(activeStepView);
+        return;
+      }
+      setView(targetView);
+    },
+    [getActiveTournamentView]
+  );
 
   // Cache active tournament on state changes (RF-120)
   useEffect(() => {
@@ -75,12 +117,12 @@ export default function App() {
             socket.emit('tournament:join', data.tournament.id);
           }
 
-          // Auto-synchronize view according to tournament.status across all clients (T28)
+          // Auto-synchronize view according to tournament.status across all clients (T28, T29)
           const status = data.tournament.status;
           if (status === 'LOBBY') {
-            setView((curr) => (curr === 'registro' ? 'lobby' : curr));
+            setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'lobby'));
           } else if (status === 'VOTING_FORMAT' || status === 'VOTING_THEME') {
-            setView('votacion');
+            setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'votacion'));
             const vs = data.tournament.votingSession || data.votingSession;
             if (vs) {
               setVotingSessionData({
@@ -126,7 +168,20 @@ export default function App() {
   useEffect(() => {
     if (!socket) return;
 
+    const handleTournamentAbandoned = () => {
+      saveOfflineTournament(null);
+      dispatch({ type: 'TOURNAMENT_ABANDONED' });
+      setCloudTournament(null);
+      setActiveTournamentId(undefined);
+      setVotingSessionData(null);
+      setView('lobby');
+    };
+
     const handleTournamentStatus = async (payload: any) => {
+      if (payload?.status === 'ABANDONED') {
+        handleTournamentAbandoned();
+        return;
+      }
       if (payload?.status === 'VOTING_FORMAT' || payload?.status === 'VOTING_THEME') {
         setView('votacion');
       }
@@ -176,12 +231,14 @@ export default function App() {
     };
 
     socket.on('tournament:status', handleTournamentStatus);
+    socket.on('tournament:abandoned', handleTournamentAbandoned);
     socket.on('vote:started', handleVoteStarted);
     socket.on('vote:ended', handleVoteEnded);
     socket.on('fixture:ready', handleFixtureReady);
 
     return () => {
       socket.off('tournament:status', handleTournamentStatus);
+      socket.off('tournament:abandoned', handleTournamentAbandoned);
       socket.off('vote:started', handleVoteStarted);
       socket.off('vote:ended', handleVoteEnded);
       socket.off('fixture:ready', handleFixtureReady);
@@ -302,7 +359,7 @@ export default function App() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 md:px-8">
-      <Header currentView={view} onNavigate={setView} />
+      <Header currentView={view} onNavigate={handleNavigate} cloudTournament={cloudTournament} />
 
       <main className="mx-auto">
         {view === 'lobby' && (

@@ -103,7 +103,7 @@ export function VotingView({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  const countdown = useCountdown(expiresAt, 120);
+  const countdown = useCountdown(expiresAt, 60);
 
   // Sync state via WebSockets (RF-99, RF-100, RF-101)
   useEffect(() => {
@@ -151,35 +151,39 @@ export function VotingView({
     };
   }, [socket]);
 
-  // Sync session and timer on mount if missing tournamentId or expiresAt (T28)
+  // Sync session, timer, and user's previous vote on mount or return (T29)
   useEffect(() => {
     let isMounted = true;
 
     async function syncActiveVotingSession() {
       let currentId = tournamentId;
 
-      if (!currentId || !expiresAt) {
-        try {
-          const res = await fetch('/api/tournaments/active', {
-            headers: { Accept: 'application/json' },
-            credentials: 'include',
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.tournament) {
-              currentId = data.tournament.id;
-              const vs = data.tournament.votingSession || data.votingSession;
-              if (vs && isMounted) {
-                if (vs.phase) setPhase(vs.phase);
-                if (vs.options) setOptions(vs.options);
-                if (vs.expiresAt) setExpiresAt(vs.expiresAt);
-                if (vs.totalVoters) setTotalVoters(vs.totalVoters);
-              }
+      try {
+        const res = await fetch('/api/tournaments/active', {
+          headers: { Accept: 'application/json' },
+          credentials: 'include',
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.tournament) {
+            currentId = data.tournament.id;
+            const vs = data.tournament.votingSession || data.votingSession;
+            if (vs && isMounted) {
+              if (vs.phase) setPhase(vs.phase);
+              if (vs.options) setOptions(vs.options);
+              if (vs.expiresAt) setExpiresAt(vs.expiresAt);
+              if (vs.totalVoters) setTotalVoters(vs.totalVoters);
+            }
+            if (data.tournament.myVote || data.myVote) {
+              setSelectedChoice(data.tournament.myVote || data.myVote);
+            }
+            if (data.tournament.myMatchFormat || data.myMatchFormat) {
+              setSelectedMatchFormat(data.tournament.myMatchFormat || data.myMatchFormat);
             }
           }
-        } catch (err) {
-          console.warn('[VotingView] Error fetching active tournament on mount:', err);
         }
+      } catch (err) {
+        console.warn('[VotingView] Error fetching active tournament on mount:', err);
       }
 
       if (currentId && socket) {
@@ -201,7 +205,32 @@ export function VotingView({
     return () => {
       isMounted = false;
     };
-  }, [tournamentId, expiresAt, socket]);
+  }, [tournamentId, socket]);
+
+  // Auto-close voting session when countdown reaches 0 even if votes are missing (T29)
+  useEffect(() => {
+    if (countdown.isExpired && !voteResult && (tournamentId || expiresAt)) {
+      const closeVotingFallback = async () => {
+        try {
+          const res = await fetch('/api/tournaments/close-voting', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({ tournamentId }),
+            credentials: 'include',
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.result) {
+              setVoteResult(data.result);
+            }
+          }
+        } catch (err) {
+          console.warn('[VotingView] Auto-close voting failed:', err);
+        }
+      };
+      closeVotingFallback();
+    }
+  }, [countdown.isExpired, voteResult, tournamentId, expiresAt]);
 
   // Submit vote to server
   const handleVote = useCallback(
@@ -261,7 +290,7 @@ export function VotingView({
             <div className="text-center sm:text-left">
               <span className="text-[11px] font-bold uppercase tracking-widest text-primary flex items-center gap-1.5 justify-center sm:justify-start">
                 <Sparkles className="h-3.5 w-3.5" />
-                Votación en Vivo (120 Segundos)
+                Votación en Vivo (60 Segundos)
               </span>
               <h2 className="font-display text-2xl font-black text-foreground">
                 Elegí el Formato del Torneo

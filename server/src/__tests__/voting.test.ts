@@ -299,9 +299,9 @@ describe('Live Voting API, Timer, Early Closure and Sockets (T15 · RF-99, RF-10
         io,
         tourneyId,
         'FORMAT',
-        ['bracket', 'league', 'league_playoffs', 'double_elimination'],
+        ['bracket', 'league', 'league_playoffs', 'double_elimination', 'random'],
         4,
-        120
+        60
       );
     });
 
@@ -350,6 +350,35 @@ describe('Live Voting API, Timer, Early Closure and Sockets (T15 · RF-99, RF-10
 
       expect(res.status).toBe(403);
       expect(res.body.error).toContain('Solo los participantes confirmados pueden emitir votos');
+    });
+
+    it('auto-reconstructs voting session if missing in memory and accepts random option (T29)', async () => {
+      const lostTourneyId = 'tourney-lost-session';
+      vi.spyOn(prisma.tournament, 'findUnique').mockResolvedValue({
+        id: lostTourneyId,
+        status: TournamentStatus.VOTING_FORMAT,
+        participants,
+      } as any);
+      vi.spyOn(prisma.tournament, 'findFirst').mockResolvedValue({
+        id: lostTourneyId,
+        status: TournamentStatus.VOTING_FORMAT,
+        participants,
+      } as any);
+      vi.spyOn(prisma.tournamentVote, 'upsert').mockResolvedValue({} as any);
+      vi.spyOn(prisma.tournamentVote, 'count').mockResolvedValue(1);
+
+      const res = await request(app)
+        .post('/api/tournaments/vote')
+        .set('Authorization', `Bearer ${createToken(player1)}`)
+        .send({
+          tournamentId: lostTourneyId,
+          phase: 'FORMAT',
+          choice: 'random',
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(getActiveVotingSession(lostTourneyId)).not.toBeNull();
     });
 
     it('records a vote, emits vote:updated and keeps voting open if < 100% (RF-100)', async () => {
@@ -490,13 +519,13 @@ describe('Live Voting API, Timer, Early Closure and Sockets (T15 · RF-99, RF-10
   describe('Timer Expiration and Auto-Closure (RF-100 condition 1)', () => {
     it('tallies cast votes and emits vote:ended when closeVotingSession is triggered on TIMEOUT', async () => {
       const tourneyId = 'tourney-timeout';
-      const session = startVotingSession(
+      startVotingSession(
         io,
         tourneyId,
         'FORMAT',
         ['bracket', 'league', 'double_elimination'],
         4,
-        120
+        60
       );
 
       vi.spyOn(prisma.tournamentVote, 'findMany').mockResolvedValue([
@@ -528,6 +557,42 @@ describe('Live Voting API, Timer, Early Closure and Sockets (T15 · RF-99, RF-10
       const socketData = await endedPromise;
       expect(socketData.winner).toBe('double_elimination');
     });
+
+    it('POST /api/tournaments/close-voting triggers idempotent manual timeout closure', async () => {
+      const tourneyId = 'tourney-close-endpoint';
+      startVotingSession(
+        io,
+        tourneyId,
+        'FORMAT',
+        ['bracket', 'league', 'double_elimination'],
+        4,
+        60
+      );
+
+      vi.spyOn(prisma.tournamentVote, 'findMany').mockResolvedValue([
+        { participantId: 'part-messi', choice: 'league' },
+      ] as any);
+      vi.spyOn(prisma.tournament, 'update').mockResolvedValue({} as any);
+
+      const res = await request(app)
+        .post('/api/tournaments/close-voting')
+        .set('Authorization', `Bearer ${createToken(player1)}`)
+        .send({ tournamentId: tourneyId });
+
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.result?.winner).toBe('league');
+
+      // Calling again should return ok idempotently
+      const res2 = await request(app)
+        .post('/api/tournaments/close-voting')
+        .set('Authorization', `Bearer ${createToken(player1)}`)
+        .send({ tournamentId: tourneyId });
+
+      expect(res2.status).toBe(200);
+      expect(res2.body.ok).toBe(true);
+      expect(res2.body.message).toContain('ya está cerrada');
+    });
   });
 
   describe('WebSocket vote:sync Event', () => {
@@ -539,7 +604,7 @@ describe('Live Voting API, Timer, Early Closure and Sockets (T15 · RF-99, RF-10
         'FORMAT',
         ['bracket', 'league', 'double_elimination'],
         4,
-        120
+        60
       );
 
       vi.spyOn(prisma.tournamentVote, 'count').mockResolvedValue(2);

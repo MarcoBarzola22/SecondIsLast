@@ -18,7 +18,6 @@ import type { CardCounts, PlayerId, Series, Side } from '../../domain/types';
 import { useAppDispatch, useAppState } from '../../state/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { PrimaryButton, SecondaryButton } from '../ui/Buttons';
-import { HandshakeModal, type HandshakeMatchData } from './HandshakeModal';
 
 interface SeriesCardProps {
   series: Series;
@@ -31,7 +30,6 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
   const { user } = useAuth();
   const currentUserId = user?.playerId;
 
-  const [handshakeMatchData, setHandshakeMatchData] = useState<HandshakeMatchData | null>(null);
   const [isSubmittingProposal, setIsSubmittingProposal] = useState<boolean>(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
 
@@ -336,82 +334,94 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
   };
 
   const openSingleMatchReview = () => {
-    setHandshakeMatchData({
-      id: targetMatchLeg1?.id || series.id,
-      seriesId: series.id,
-      homePlayerId: series.playerA!,
-      awayPlayerId: series.playerB!,
-      homePlayerName: nameA,
-      homeTeamName: teamA,
-      awayPlayerName: nameB,
-      awayTeamName: teamB,
-      homeScore: series.leg1.a ?? 0,
-      awayScore: series.leg1.b ?? 0,
-      homeYellowCards: series.leg1.cardsA?.yellow ?? 0,
-      awayYellowCards: series.leg1.cardsB?.yellow ?? 0,
-      homeRedCards: series.leg1.cardsA?.red ?? 0,
-      awayRedCards: series.leg1.cardsB?.red ?? 0,
-      penaltiesWinnerId: series.penaltyWinner ?? null,
-      penaltiesWinnerName:
-        series.penaltyWinner === series.playerA
-          ? nameA
-          : series.penaltyWinner === series.playerB
-            ? nameB
-            : null,
-      version: singleMatchVersion,
-      status: singleMatchStatus,
-    });
+    window.dispatchEvent(
+      new CustomEvent('open-handshake-modal', {
+        detail: {
+          id: targetMatchLeg1?.id || series.id,
+          seriesId: series.id,
+          homePlayerId: series.playerA!,
+          awayPlayerId: series.playerB!,
+          homePlayerName: nameA,
+          homeTeamName: teamA,
+          awayPlayerName: nameB,
+          awayTeamName: teamB,
+          homeScore: series.leg1.a ?? 0,
+          awayScore: series.leg1.b ?? 0,
+          homeYellowCards: series.leg1.cardsA?.yellow ?? 0,
+          awayYellowCards: series.leg1.cardsB?.yellow ?? 0,
+          homeRedCards: series.leg1.cardsA?.red ?? 0,
+          awayRedCards: series.leg1.cardsB?.red ?? 0,
+          penaltiesWinnerId: series.penaltyWinner ?? null,
+          penaltiesWinnerName:
+            series.penaltyWinner === series.playerA
+              ? nameA
+              : series.penaltyWinner === series.playerB
+                ? nameB
+                : null,
+          version: singleMatchVersion,
+          status: singleMatchStatus,
+        },
+      })
+    );
   };
 
   const openLeg1Review = () => {
-    setHandshakeMatchData({
-      id: targetMatchLeg1?.id || `${series.id}_leg1`,
-      seriesId: series.id,
-      leg: 1,
-      homePlayerId: series.playerA!,
-      awayPlayerId: series.playerB!,
-      homePlayerName: nameA,
-      homeTeamName: teamA,
-      awayPlayerName: nameB,
-      awayTeamName: teamB,
-      homeScore: series.leg1.a ?? 0,
-      awayScore: series.leg1.b ?? 0,
-      homeYellowCards: series.leg1.cardsA?.yellow ?? 0,
-      awayYellowCards: series.leg1.cardsB?.yellow ?? 0,
-      homeRedCards: series.leg1.cardsA?.red ?? 0,
-      awayRedCards: series.leg1.cardsB?.red ?? 0,
-      version: leg1Version,
-      status: leg1Status,
-    });
+    window.dispatchEvent(
+      new CustomEvent('open-handshake-modal', {
+        detail: {
+          id: targetMatchLeg1?.id || `${series.id}_leg1`,
+          seriesId: series.id,
+          leg: 1,
+          homePlayerId: series.playerA!,
+          awayPlayerId: series.playerB!,
+          homePlayerName: nameA,
+          homeTeamName: teamA,
+          awayPlayerName: nameB,
+          awayTeamName: teamB,
+          homeScore: series.leg1.a ?? 0,
+          awayScore: series.leg1.b ?? 0,
+          homeYellowCards: series.leg1.cardsA?.yellow ?? 0,
+          awayYellowCards: series.leg1.cardsB?.yellow ?? 0,
+          homeRedCards: series.leg1.cardsA?.red ?? 0,
+          awayRedCards: series.leg1.cardsB?.red ?? 0,
+          version: leg1Version,
+          status: leg1Status,
+        },
+      })
+    );
   };
 
   const openLeg2Review = () => {
-    setHandshakeMatchData({
-      id: targetMatchLeg2?.id || `${series.id}_leg2`,
-      seriesId: series.id,
-      leg: 2,
-      homePlayerId: series.playerB!,
-      awayPlayerId: series.playerA!,
-      homePlayerName: nameB,
-      homeTeamName: teamB,
-      awayPlayerName: nameA,
-      awayTeamName: teamA,
-      homeScore: series.leg2.b ?? 0,
-      awayScore: series.leg2.a ?? 0,
-      homeYellowCards: series.leg2.cardsB?.yellow ?? 0,
-      awayYellowCards: series.leg2.cardsA?.yellow ?? 0,
-      homeRedCards: series.leg2.cardsB?.red ?? 0,
-      awayRedCards: series.leg2.cardsA?.red ?? 0,
-      penaltiesWinnerId: series.penaltyWinner ?? null,
-      penaltiesWinnerName:
-        series.penaltyWinner === series.playerA
-          ? nameA
-          : series.penaltyWinner === series.playerB
-            ? nameB
-            : null,
-      version: leg2Version,
-      status: leg2Status,
-    });
+    window.dispatchEvent(
+      new CustomEvent('open-handshake-modal', {
+        detail: {
+          id: targetMatchLeg2?.id || `${series.id}_leg2`,
+          seriesId: series.id,
+          leg: 2,
+          homePlayerId: series.playerB!,
+          awayPlayerId: series.playerA!,
+          homePlayerName: nameB,
+          homeTeamName: teamB,
+          awayPlayerName: nameA,
+          awayTeamName: teamA,
+          homeScore: series.leg2.b ?? 0,
+          awayScore: series.leg2.a ?? 0,
+          homeYellowCards: series.leg2.cardsB?.yellow ?? 0,
+          awayYellowCards: series.leg2.cardsA?.yellow ?? 0,
+          homeRedCards: series.leg2.cardsB?.red ?? 0,
+          awayRedCards: series.leg2.cardsA?.red ?? 0,
+          penaltiesWinnerId: series.penaltyWinner ?? null,
+          penaltiesWinnerName:
+            series.penaltyWinner === series.playerA
+              ? nameA
+              : series.penaltyWinner === series.playerB
+                ? nameB
+                : null,
+          version: leg2Version,
+          status: leg2Status,
+        },
+      })
+    );
   };
 
   const renderSideHeader = (
@@ -1053,19 +1063,6 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
             </div>
           </div>
         </div>
-      )}
-
-      {handshakeMatchData && (
-        <HandshakeModal
-          isOpen={Boolean(handshakeMatchData)}
-          onClose={() => setHandshakeMatchData(null)}
-          matchData={handshakeMatchData}
-          onSuccess={() => {
-            if (isSingleMatch || (series.leg1.a !== null && series.leg2.a !== null)) {
-              dispatch({ type: 'SERIES_CONFIRMED', seriesId: series.id });
-            }
-          }}
-        />
       )}
     </div>
   );

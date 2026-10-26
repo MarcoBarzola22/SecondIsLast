@@ -169,11 +169,11 @@ describe('Auth Integration Tests (RF-88, RNF-4)', () => {
   });
 
   describe('GET /api/auth/me', () => {
-    it('should return 401 when no token is present', async () => {
+    it('should return 200 with user null without noisy 401 when no token is present', async () => {
       const res = await request(app).get('/api/auth/me');
 
-      expect(res.status).toBe(401);
-      expect(res.body.error).toContain('No autorizado');
+      expect(res.status).toBe(200);
+      expect(res.body.user).toBeNull();
     });
 
     it('should return user profile when authenticated via cookie', async () => {

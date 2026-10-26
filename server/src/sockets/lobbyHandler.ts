@@ -95,10 +95,12 @@ export function broadcastLobbyUpdated(
             );
 
             if (io) {
-              io.to(`tournament:${tournamentId}`).emit('tournament:status', {
+              const statusPayload = {
                 status: 'VOTING_FORMAT',
                 tournamentId,
-              });
+              };
+              io.to(`tournament:${tournamentId}`).emit('tournament:status', statusPayload);
+              io.emit('tournament:status', statusPayload);
             }
           }
         } catch (err) {

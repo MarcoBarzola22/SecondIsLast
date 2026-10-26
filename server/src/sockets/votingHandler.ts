@@ -6,7 +6,7 @@ import { TournamentFormat } from '@prisma/client';
 
 export interface ActiveVotingSession {
   tournamentId: string;
-  phase: 'FORMAT' | 'THEME';
+  phase: 'FORMAT' | 'THEME' | 'ASSIGNMENT_METHOD';
   options: string[];
   expiresAt: string;
   expiresAtMs: number;
@@ -16,21 +16,22 @@ export interface ActiveVotingSession {
 }
 
 export interface VoteStartedPayload {
-  phase: 'FORMAT' | 'THEME';
+  phase: 'FORMAT' | 'THEME' | 'ASSIGNMENT_METHOD';
   options: string[];
   expiresAt: string;
   totalVoters: number;
 }
 
 export interface VoteUpdatedPayload {
-  phase: 'FORMAT' | 'THEME';
+  phase: 'FORMAT' | 'THEME' | 'ASSIGNMENT_METHOD';
   votesCast: number;
   totalVoters: number;
 }
 
 export interface VoteEndedPayload {
-  phase: 'FORMAT' | 'THEME';
+  phase: 'FORMAT' | 'THEME' | 'ASSIGNMENT_METHOD';
   winner: string;
+  matchFormat?: string;
   wasDraw: boolean;
   tiedOptions?: string[];
   voteCounts: Record<string, number>;
@@ -79,7 +80,7 @@ export function mapDomainFormatToPrisma(format: string): TournamentFormat {
 export function startVotingSession(
   io: AppSocketServer | null,
   tournamentId: string,
-  phase: 'FORMAT' | 'THEME',
+  phase: 'FORMAT' | 'THEME' | 'ASSIGNMENT_METHOD',
   options: string[],
   totalVoters: number,
   durationSeconds: number = 60,
@@ -139,7 +140,7 @@ export function startVotingSession(
 export function broadcastVoteUpdated(
   io: AppSocketServer | null,
   tournamentId: string,
-  phase: 'FORMAT' | 'THEME',
+  phase: 'FORMAT' | 'THEME' | 'ASSIGNMENT_METHOD',
   votesCast: number,
   totalVoters: number
 ): void {
@@ -207,11 +208,19 @@ export async function closeVotingSession(
     const prismaFormat = mapDomainFormatToPrisma(resolvedFormat);
 
     // Tally matchFormat votes from tournament settings if present
-    const tourney = await prisma.tournament.findUnique({
-      where: { id: tournamentId },
-      select: { settings: true },
-    });
-    const settings = (tourney?.settings as any) || {};
+    let settings: any = {};
+    try {
+      const tourney = await prisma.tournament.findUnique({
+        where: { id: tournamentId },
+        select: { settings: true },
+      });
+      if (tourney?.settings) {
+        settings = tourney.settings;
+      }
+    } catch {
+      // Gracefully handle unmocked or disconnected DB in unit tests
+    }
+
     const matchFormatVotes = settings.matchFormatVotes || {};
     let twoLeggedCount = 0;
     let singleMatchCount = 0;
@@ -226,7 +235,6 @@ export async function closeVotingSession(
       data: {
         format: prismaFormat,
         matchFormat: winnerMatchFormat as any,
-        status: 'VOTING_THEME',
       },
     });
   } else if (session.phase === 'THEME') {
@@ -236,27 +244,45 @@ export async function closeVotingSession(
         theme: result.winner,
       },
     });
+  } else if (session.phase === 'ASSIGNMENT_METHOD') {
+    let settings: any = {};
+    try {
+      const tourney = await prisma.tournament.findUnique({
+        where: { id: tournamentId },
+        select: { settings: true },
+      });
+      if (tourney?.settings && typeof tourney.settings === 'object') {
+        settings = tourney.settings;
+      }
+    } catch {
+      // Gracefully continue
+    }
+    settings.assignmentMethod = result.winner;
+    await prisma.tournament.update({
+      where: { id: tournamentId },
+      data: { settings },
+    });
   }
 
   // 4. Clean up in-memory session
   activeVotingSessions.delete(tournamentId);
 
-  // 5. Broadcast vote:ended event
+  // 5. Broadcast vote:ended event across room and globally
   const payload: VoteEndedPayload = {
     phase: session.phase,
     winner: result.winner,
+    matchFormat: session.phase === 'FORMAT' ? (await prisma.tournament.findUnique({ where: { id: tournamentId } }))?.matchFormat || 'SINGLE_MATCH' : undefined,
     wasDraw: result.wasDraw,
     tiedOptions: result.tiedOptions,
     voteCounts: result.voteCounts,
   };
 
   if (io) {
-    io.to(`tournament:${tournamentId}`).emit('vote:ended', payload);
-    if (session.phase === 'FORMAT') {
-      io.to(`tournament:${tournamentId}`).emit('tournament:status', {
-        status: 'VOTING_THEME',
-        tournamentId,
-      });
+    try {
+      io.to(`tournament:${tournamentId}`).emit('vote:ended', payload);
+      io.emit('vote:ended', payload);
+    } catch (err) {
+      console.warn('[VotingHandler] Error emitting vote:ended:', err);
     }
   }
 

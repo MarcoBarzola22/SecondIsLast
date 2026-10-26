@@ -32,6 +32,31 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   }
 }
 
+export function optionalAuthMiddleware(req: Request, _res: Response, next: NextFunction): void {
+  let token: string | undefined;
+
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7);
+  }
+
+  if (!token && req.cookies && req.cookies.token) {
+    token = req.cookies.token;
+  }
+
+  if (!token) {
+    return next();
+  }
+
+  try {
+    const decoded = jwt.verify(token, config.jwtSecret) as AuthUser;
+    req.user = decoded;
+  } catch {
+    // Continue silently without authenticated user
+  }
+  next();
+}
+
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   if (!req.user || req.user.role !== Role.ADMIN) {
     res.status(403).json({ error: 'Acceso restringido. Solo los administradores pueden realizar esta acción.' });

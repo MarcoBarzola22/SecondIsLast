@@ -113,15 +113,16 @@ export default function App() {
           setCloudTournament(data.tournament);
           saveOfflineTournament(data.tournament);
           setActiveTournamentId(data.tournament.id);
+          dispatch({ type: 'HYDRATE_TOURNAMENT', payload: data.tournament });
           if (socket) {
             socket.emit('tournament:join', data.tournament.id);
           }
 
-          // Auto-synchronize view according to tournament.status across all clients (T28, T29)
+          // Auto-synchronize view according to tournament.status across all clients (T28)
           const status = data.tournament.status;
           if (status === 'LOBBY') {
             setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'lobby'));
-          } else if (status === 'VOTING_FORMAT' || status === 'VOTING_THEME') {
+          } else if (status === 'VOTING_FORMAT') {
             setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'votacion'));
             const vs = data.tournament.votingSession || data.votingSession;
             if (vs) {
@@ -143,6 +144,9 @@ export default function App() {
                 }
               });
             }
+          } else if (status === 'VOTING_THEME') {
+            // VOTING_THEME routes strictly to 'equipos', NEVER 'votacion' (Item 4)
+            setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'equipos'));
           } else if (status === 'IN_PROGRESS') {
             const format = (data.tournament.format || '').toLowerCase();
             if (format === 'bracket') setView('bracket');
@@ -182,8 +186,10 @@ export default function App() {
         handleTournamentAbandoned();
         return;
       }
-      if (payload?.status === 'VOTING_FORMAT' || payload?.status === 'VOTING_THEME') {
+      if (payload?.status === 'VOTING_FORMAT') {
         setView('votacion');
+      } else if (payload?.status === 'VOTING_THEME') {
+        setView('equipos');
       }
       if (isOnline && user) {
         await rehydrateActiveTournament();
@@ -191,23 +197,41 @@ export default function App() {
     };
 
     const handleVoteStarted = (payload: any) => {
-      setVotingSessionData({
-        expiresAt: payload.expiresAt,
-        options: payload.options,
-        phase: payload.phase,
-        totalVoters: payload.totalVoters,
-      });
-      setView('votacion');
+      if (payload?.phase === 'FORMAT') {
+        setVotingSessionData({
+          expiresAt: payload.expiresAt,
+          options: payload.options,
+          phase: payload.phase,
+          totalVoters: payload.totalVoters,
+        });
+        setView('votacion');
+      } else {
+        setView('equipos');
+      }
     };
 
     const handleVoteEnded = async () => {
-      setView('equipos');
       if (isOnline && user) {
         await rehydrateActiveTournament();
       }
     };
 
     const handleFixtureReady = async (payload: any) => {
+      const tournamentData = payload?.tournament || {
+        ...cloudTournament,
+        matches: payload?.matches,
+      };
+
+      if (tournamentData) {
+        dispatch({
+          type: 'HYDRATE_TOURNAMENT',
+          payload: {
+            ...tournamentData,
+            matches: payload?.matches || tournamentData.matches,
+          },
+        });
+      }
+
       const format = (
         payload?.tournament?.format ||
         payload?.format ||
@@ -245,15 +269,27 @@ export default function App() {
     };
   }, [socket, isOnline, user, cloudTournament?.format, rehydrateActiveTournament]);
 
-  // Live WebSocket Handshake Notification & Sequential Unlock (RF-105, RF-108, RF-114, RF-115, RF-119)
+  // Global Handshake event listener from cards (T35)
   useEffect(() => {
-    if (!socket || !user?.playerId) return;
+    const handleOpenHandshake = (event: any) => {
+      if (event?.detail) {
+        setLiveHandshakeMatch(event.detail);
+      }
+    };
+    window.addEventListener('open-handshake-modal', handleOpenHandshake);
+    return () => {
+      window.removeEventListener('open-handshake-modal', handleOpenHandshake);
+    };
+  }, []);
+
+  // Live WebSocket Handshake Notification & Sequential Unlock (RF-105, RF-108, RF-114, RF-115, RF-119, T34, T35)
+  useEffect(() => {
+    if (!socket || !user) return;
 
     const handleMatchSubmitted = async (payload: any) => {
-      let awayPlayerId = payload.awayPlayerId || payload.awayParticipant?.playerId;
       let matchDetail = payload.match;
 
-      if (!awayPlayerId && payload.matchId) {
+      if (!matchDetail && payload.matchId) {
         try {
           const res = await fetch(`/api/matches/${payload.matchId}`, {
             credentials: 'include',
@@ -262,7 +298,6 @@ export default function App() {
             const data = await res.json();
             if (data.match) {
               matchDetail = data.match;
-              awayPlayerId = data.match.awayParticipant?.playerId;
             }
           }
         } catch {
@@ -270,23 +305,82 @@ export default function App() {
         }
       }
 
-      if (awayPlayerId === user.playerId && matchDetail) {
+      if (!matchDetail && payload.matchId) {
+        matchDetail = {
+          id: payload.matchId,
+          version: payload.version ?? 1,
+          homeScore: payload.homeScore ?? 0,
+          awayScore: payload.awayScore ?? 0,
+          penaltiesWinnerId: payload.penaltiesWinnerId,
+          homeParticipant: { playerId: payload.homePlayerId },
+          awayParticipant: { playerId: payload.awayPlayerId },
+        };
+      }
+
+      if (!matchDetail) return;
+
+      // Exhaustive cross-check to verify if the current user is the Away player (T34, T35)
+      let currentUser = user;
+      let effectiveUserPlayerId = currentUser.playerId || currentUser.player?.id;
+
+      if (!effectiveUserPlayerId) {
+        try {
+          const meRes = await fetch('/api/auth/me', { credentials: 'include' });
+          if (meRes.ok) {
+            const meData = await meRes.json();
+            if (meData?.user) {
+              currentUser = meData.user;
+              effectiveUserPlayerId = meData.user.playerId || meData.user.player?.id;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      const awayParticipant = matchDetail.awayParticipant;
+      const awayPlayerId = payload.awayPlayerId || awayParticipant?.playerId || awayParticipant?.player?.id;
+      const awayEmail = (payload.awayEmail || awayParticipant?.player?.user?.email || '').toLowerCase().trim();
+      const userEmail = (currentUser.email || '').toLowerCase().trim();
+
+      // Check against tournament participants
+      const tournamentParticipants = (cloudTournament?.participants || (activeTournament as any)?.participants || []) as any[];
+      const userParticipant = tournamentParticipants.find(
+        (p: any) =>
+          (effectiveUserPlayerId && (p.playerId === effectiveUserPlayerId || p.player?.id === effectiveUserPlayerId)) ||
+          (userEmail && (p.player?.user?.email?.toLowerCase() === userEmail || p.email?.toLowerCase() === userEmail)) ||
+          (currentUser.id && (p.player?.userId === currentUser.id || p.userId === currentUser.id))
+      );
+
+      const isAwayPlayer = Boolean(
+        (effectiveUserPlayerId && awayPlayerId && effectiveUserPlayerId === awayPlayerId) ||
+        (userEmail && awayEmail && userEmail === awayEmail) ||
+        (currentUser.id && (awayParticipant?.player?.userId === currentUser.id || awayParticipant?.player?.user?.id === currentUser.id)) ||
+        (userParticipant && awayParticipant && userParticipant.id === awayParticipant.id) ||
+        (matchDetail.awayParticipantId && userParticipant?.id === matchDetail.awayParticipantId)
+      );
+
+      if (isOnline) {
+        rehydrateActiveTournament();
+      }
+
+      if (isAwayPlayer) {
         setLiveHandshakeMatch({
           id: matchDetail.id,
           round: matchDetail.round,
           leg: matchDetail.leg,
           seriesId: matchDetail.seriesId,
-          homePlayerId: matchDetail.homeParticipant?.playerId || '',
-          awayPlayerId: matchDetail.awayParticipant?.playerId || user.playerId,
+          homePlayerId: matchDetail.homeParticipant?.playerId || payload.homePlayerId || '',
+          awayPlayerId: awayPlayerId || effectiveUserPlayerId || currentUser.id,
           homePlayerName: matchDetail.homeParticipant?.player
             ? `${matchDetail.homeParticipant.player.lastName}, ${matchDetail.homeParticipant.player.firstName}`
-            : 'Local',
+            : (matchDetail.homeParticipant?.name || 'Local'),
           homeTeamName: matchDetail.homeTeamName || '',
           awayPlayerName: matchDetail.awayParticipant?.player
             ? `${matchDetail.awayParticipant.player.lastName}, ${matchDetail.awayParticipant.player.firstName}`
-            : user.player
-              ? `${user.player.lastName}, ${user.player.firstName}`
-              : user.name,
+            : currentUser.player
+              ? `${currentUser.player.lastName}, ${currentUser.player.firstName}`
+              : currentUser.name,
           awayTeamName: matchDetail.awayTeamName || '',
           homeScore: matchDetail.homeScore ?? payload.homeScore ?? 0,
           awayScore: matchDetail.awayScore ?? payload.awayScore ?? 0,
@@ -316,10 +410,17 @@ export default function App() {
         bracket: payload.bracket,
         unblockedParticipants: payload.unblockedParticipants,
       });
+
+      if (isOnline) {
+        rehydrateActiveTournament();
+      }
     };
 
     const handleMatchRejected = (payload: any) => {
       setLiveHandshakeMatch((prev) => (prev && prev.id === payload.matchId ? null : prev));
+      if (isOnline) {
+        rehydrateActiveTournament();
+      }
     };
 
     const handleWalkoverApplied = (payload: any) => {
@@ -331,6 +432,10 @@ export default function App() {
         participantId: payload.participantId,
         matches: payload.matches,
       });
+
+      if (isOnline) {
+        rehydrateActiveTournament();
+      }
     };
 
     const handleTournamentFinished = (payload: any) => {
@@ -340,6 +445,10 @@ export default function App() {
         summaryId: payload.tournamentId || crypto.randomUUID(),
         now: new Date().toISOString(),
       });
+
+      if (isOnline) {
+        rehydrateActiveTournament();
+      }
     };
 
     socket.on('match:submitted', handleMatchSubmitted);
@@ -355,7 +464,7 @@ export default function App() {
       socket.off('walkover:applied', handleWalkoverApplied);
       socket.off('tournament:finished', handleTournamentFinished);
     };
-  }, [socket, user?.playerId, user?.name, user?.player, dispatch]);
+  }, [socket, user, dispatch, isOnline, rehydrateActiveTournament, cloudTournament, activeTournament]);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 md:px-8">
@@ -377,7 +486,29 @@ export default function App() {
         )}
 
         {view === 'equipos' && (
-          <TeamsPreviewView onProceedToFixture={() => setView('draft')} />
+          <TeamsPreviewView
+            tournamentId={cloudTournament?.id || activeTournamentId || activeTournament?.id}
+            initialTheme={cloudTournament?.theme || 'Apertura 2006'}
+            participantCount={cloudTournament?.participants?.length || 4}
+            participants={
+              cloudTournament?.participants?.map((p: any) => ({
+                id: p.id,
+                name: p.player ? `${p.player.firstName} ${p.player.lastName}`.trim() : (p.name || 'Jugador'),
+              })) || []
+            }
+            onProceedToFixture={(method?: string) => {
+              if (method === 'DRAFT_ORDER') {
+                setView('draft');
+                return;
+              }
+              const format = (cloudTournament?.format || '').toLowerCase();
+              if (format === 'bracket') setView('bracket');
+              else if (format === 'league' || format === 'league_playoffs') setView('league');
+              else if (format === 'group_stage') setView('group_stage');
+              else if (format === 'double_elimination') setView('double_elimination');
+              else setView('draft');
+            }}
+          />
         )}
 
         {view === 'registro' && (
@@ -427,6 +558,9 @@ export default function App() {
           matchData={liveHandshakeMatch}
           onSuccess={() => {
             setLiveHandshakeMatch(null);
+            if (isOnline) {
+              rehydrateActiveTournament();
+            }
           }}
         />
       )}

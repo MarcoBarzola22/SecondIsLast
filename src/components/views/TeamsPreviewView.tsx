@@ -10,12 +10,16 @@ import {
   X,
   ArrowRight,
   Dices,
+  Clock,
+  CheckCircle,
+  CheckCircle2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import { PrimaryButton, SecondaryButton } from '../ui/Buttons';
 import { Panel } from '../ui/Panel';
 import { DEFAULT_THEME_TEAMS } from '../../domain/teams';
+import { useCountdown } from '../../hooks/useCountdown';
 
 export interface DrawAnimatedPayload {
   step: number;
@@ -23,8 +27,11 @@ export interface DrawAnimatedPayload {
   currentItem: string;
   targetParticipantId?: string;
   participantName?: string;
+  targetPlayerName?: string;
   isFinal: boolean;
   assignments?: Record<string, string>;
+  method?: 'DIRECT_DRAW' | 'DRAFT_ORDER';
+  draftOrder?: Array<{ order: number; participantId: string; participantName: string }>;
 }
 
 export interface TeamsPreviewViewProps {
@@ -32,7 +39,7 @@ export interface TeamsPreviewViewProps {
   initialTheme?: string;
   participantCount?: number;
   participants?: Array<{ id: string; name: string }>;
-  onProceedToFixture?: () => void;
+  onProceedToFixture?: (method?: 'DIRECT_DRAW' | 'DRAFT_ORDER') => void;
 }
 
 export function TeamsPreviewView({
@@ -48,6 +55,7 @@ export function TeamsPreviewView({
   const [theme, setTheme] = useState<string>(initialTheme);
   const [teams, setTeams] = useState<string[]>(() => DEFAULT_THEME_TEAMS[initialTheme] || []);
   const [isCustom, setIsCustom] = useState<boolean>(false);
+  const [assignmentMethod, setAssignmentMethod] = useState<'DIRECT_DRAW' | 'DRAFT_ORDER'>('DIRECT_DRAW');
   const [error, setError] = useState<string | null>(null);
 
   // Admin Preload Modal state (RF-103)
@@ -61,7 +69,65 @@ export function TeamsPreviewView({
   const [isDrawing, setIsDrawing] = useState<boolean>(false);
   const [drawStep, setDrawStep] = useState<DrawAnimatedPayload | null>(null);
   const [finalAssignments, setFinalAssignments] = useState<Record<string, string>>({});
+  const [draftOrderResults, setDraftOrderResults] = useState<
+    Array<{ order: number; participantId: string; participantName: string }>
+  >([]);
   const [isDrawComplete, setIsDrawComplete] = useState<boolean>(false);
+
+  // Synchronized Voting for Assignment Method (T33, T34)
+  const [votingExpiresAt, setVotingExpiresAt] = useState<string | null>(null);
+  const [hasVotingEnded, setHasVotingEnded] = useState<boolean>(false);
+  const [votedChoice, setVotedChoice] = useState<'DIRECT_DRAW' | 'DRAFT_ORDER' | null>(null);
+  const [votesCast, setVotesCast] = useState<number>(0);
+  const [totalVoters, setTotalVoters] = useState<number>(participantCount);
+  const [isSubmittingVote, setIsSubmittingVote] = useState<boolean>(false);
+  const [winnerAnnouncement, setWinnerAnnouncement] = useState<string | null>(null);
+  const [voteResult, setVoteResult] = useState<{
+    winner: string;
+    wasDraw?: boolean;
+    tiedOptions?: string[];
+    voteCounts?: Record<string, number>;
+  } | null>(null);
+
+  const votingCountdown = useCountdown(votingExpiresAt, 60);
+
+  // Start or synchronize assignment method voting session (T33, T34)
+  useEffect(() => {
+    let isMounted = true;
+    async function initVoting() {
+      if (!tournamentId) return;
+      try {
+        const res = await fetch('/api/tournaments/start-voting', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ tournamentId, phase: 'ASSIGNMENT_METHOD' }),
+          credentials: 'include',
+        });
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          if (data.session) {
+            setVotingExpiresAt(data.session.expiresAt);
+            setTotalVoters(data.session.totalVoters || participantCount);
+            if (data.session.closed || data.session.isClosed) {
+              setHasVotingEnded(true);
+              if (data.session.winner) {
+                const winner = data.session.winner.toUpperCase() === 'DRAFT_ORDER' ? 'DRAFT_ORDER' : 'DIRECT_DRAW';
+                setAssignmentMethod(winner);
+              }
+            } else {
+              setHasVotingEnded(false);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[TeamsPreviewView] Error starting assignment voting:', err);
+      }
+    }
+    initVoting();
+    return () => {
+      isMounted = false;
+    };
+  }, [tournamentId, participantCount]);
 
   // Fetch available teams for the current theme
   const fetchTeams = useCallback(async (targetTheme?: string) => {
@@ -91,7 +157,68 @@ export function TeamsPreviewView({
     fetchTeams(initialTheme);
   }, [fetchTeams, initialTheme]);
 
-  // Synchronized WebSocket event listeners (RF-104)
+  // Trigger Team Draw (usable manually or via auto-advance)
+  const handleStartDraw = useCallback(async (overrideMethod?: string) => {
+    try {
+      setIsDrawing(true);
+      setError(null);
+
+      const res = await fetch('/api/tournaments/draw-teams', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          tournamentId,
+          assignmentMethod: overrideMethod || assignmentMethod,
+        }),
+        credentials: 'include',
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Error al iniciar el sorteo.');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Error al iniciar el sorteo.');
+      setIsDrawing(false);
+    }
+  }, [tournamentId, assignmentMethod]);
+
+  const announceWinnerAndAutoAdvance = useCallback((
+    winnerRaw: string,
+    wasDraw?: boolean,
+    tiedOptions?: string[],
+    voteCounts?: Record<string, number>
+  ) => {
+    const winner = winnerRaw?.toUpperCase() === 'DRAFT_ORDER' ? 'DRAFT_ORDER' : 'DIRECT_DRAW';
+    setAssignmentMethod(winner);
+    setHasVotingEnded(true);
+    setVoteResult({
+      winner,
+      wasDraw,
+      tiedOptions,
+      voteCounts,
+    });
+
+    const winnerTitle =
+      winner === 'DIRECT_DRAW'
+        ? 'Sorteo Directo de Equipos'
+        : 'Sorteo de Orden de Elección (Draft)';
+    setWinnerAnnouncement(winnerTitle);
+
+    // Mostrar cartel grande durante 3 segundos, y recién ahí invocar automáticamente (T35)
+    setTimeout(() => {
+      setWinnerAnnouncement(null);
+      if (winner === 'DIRECT_DRAW') {
+        handleStartDraw('DIRECT_DRAW');
+      } else {
+        if (onProceedToFixture) {
+          onProceedToFixture('DRAFT_ORDER');
+        }
+      }
+    }, 3000);
+  }, [handleStartDraw, onProceedToFixture]);
+
+  // Synchronized WebSocket event listeners (RF-104, T33)
   useEffect(() => {
     if (!socket) return;
 
@@ -99,16 +226,54 @@ export function TeamsPreviewView({
       setIsDrawing(true);
       setDrawStep(payload);
 
+      if (payload.method) {
+        setAssignmentMethod(payload.method);
+      }
+
       if (payload.isFinal) {
         setIsDrawing(false);
         setIsDrawComplete(true);
         if (payload.assignments) {
           setFinalAssignments(payload.assignments);
         }
+        if (payload.draftOrder) {
+          setDraftOrderResults(payload.draftOrder);
+        }
+      }
+    };
+
+    const handleVoteStarted = (payload: any) => {
+      if (payload.phase === 'ASSIGNMENT_METHOD') {
+        setVotingExpiresAt(payload.expiresAt);
+        setTotalVoters(payload.totalVoters || participantCount);
+        setVotesCast(0);
+        setHasVotingEnded(false);
+        setVoteResult(null);
+      }
+    };
+
+    const handleVoteUpdated = (payload: any) => {
+      if (payload.phase === 'ASSIGNMENT_METHOD') {
+        setVotesCast(payload.votesCast);
+        if (payload.totalVoters) setTotalVoters(payload.totalVoters);
+      }
+    };
+
+    const handleVoteEnded = (payload: any) => {
+      if (payload.phase === 'ASSIGNMENT_METHOD') {
+        announceWinnerAndAutoAdvance(
+          payload.winner,
+          payload.wasDraw,
+          payload.tiedOptions,
+          payload.voteCounts
+        );
       }
     };
 
     socket.on('draw:animated', handleDrawAnimated);
+    socket.on('vote:started', handleVoteStarted);
+    socket.on('vote:updated', handleVoteUpdated);
+    socket.on('vote:ended', handleVoteEnded);
 
     // Reconnection & sync check (RF-104)
     if (tournamentId) {
@@ -117,8 +282,10 @@ export function TeamsPreviewView({
           if (res.inProgress && res.currentStep) {
             setIsDrawing(true);
           }
-          if (res.isComplete && res.assignments) {
-            setFinalAssignments(res.assignments);
+          if (res.isComplete) {
+            if (res.assignments) setFinalAssignments(res.assignments);
+            if (res.draftOrder) setDraftOrderResults(res.draftOrder);
+            if (res.method) setAssignmentMethod(res.method);
             setIsDrawComplete(true);
             setIsDrawing(false);
           }
@@ -128,8 +295,120 @@ export function TeamsPreviewView({
 
     return () => {
       socket.off('draw:animated', handleDrawAnimated);
+      socket.off('vote:started', handleVoteStarted);
+      socket.off('vote:updated', handleVoteUpdated);
+      socket.off('vote:ended', handleVoteEnded);
     };
-  }, [socket, tournamentId]);
+  }, [socket, tournamentId, participantCount, assignmentMethod, onProceedToFixture]);
+
+  // Auto-close fallback when timer expires (T33, T34, T35)
+  // ONLY triggers if votingExpiresAt is populated and timer actually reached 0
+  useEffect(() => {
+    if (Boolean(votingExpiresAt) && votingCountdown.isExpired && !hasVotingEnded && tournamentId) {
+      fetch('/api/tournaments/close-voting', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tournamentId }),
+        credentials: 'include',
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data?.winner) {
+            const winner = data.winner.toUpperCase() === 'DRAFT_ORDER' ? 'DRAFT_ORDER' : 'DIRECT_DRAW';
+            setAssignmentMethod(winner);
+            setHasVotingEnded(true);
+            setVoteResult({
+              winner,
+              wasDraw: data.wasDraw,
+              tiedOptions: data.tiedOptions,
+              voteCounts: data.voteCounts,
+            });
+            const winnerTitle =
+              winner === 'DIRECT_DRAW'
+                ? 'Sorteo Directo de Equipos'
+                : 'Sorteo de Orden de Elección (Draft)';
+            setWinnerAnnouncement(winnerTitle);
+
+            setTimeout(() => {
+              setWinnerAnnouncement(null);
+              if (winner === 'DIRECT_DRAW') {
+                // Execute draw
+                fetch('/api/tournaments/draw-teams', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ tournamentId, assignmentMethod: 'DIRECT_DRAW' }),
+                  credentials: 'include',
+                }).catch((err) => console.warn('[TeamsPreviewView] Error auto-triggering draw:', err));
+              } else {
+                if (onProceedToFixture) {
+                  onProceedToFixture('DRAFT_ORDER');
+                }
+              }
+            }, 3000);
+          }
+        })
+        .catch((err) => console.warn('[TeamsPreviewView] Error closing voting on timeout:', err));
+    }
+  }, [votingExpiresAt, votingCountdown.isExpired, hasVotingEnded, tournamentId, onProceedToFixture]);
+
+  // Confirm vote for assignment method directly from card buttons (T33, T34, T35)
+  const handleConfirmVote = async (choice: 'DIRECT_DRAW' | 'DRAFT_ORDER') => {
+    if (isSubmittingVote || votedChoice) return;
+    try {
+      setIsSubmittingVote(true);
+      const res = await fetch('/api/tournaments/vote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          tournamentId,
+          phase: 'ASSIGNMENT_METHOD',
+          choice,
+        }),
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Error al emitir voto.');
+      }
+      setVotedChoice(choice);
+      if (data.result?.winner) {
+        const winner = data.result.winner.toUpperCase() === 'DRAFT_ORDER' ? 'DRAFT_ORDER' : 'DIRECT_DRAW';
+        setAssignmentMethod(winner);
+        setHasVotingEnded(true);
+        setVoteResult({
+          winner,
+          wasDraw: data.result.wasDraw,
+          tiedOptions: data.result.tiedOptions,
+          voteCounts: data.result.voteCounts,
+        });
+        const winnerTitle =
+          winner === 'DIRECT_DRAW'
+            ? 'Sorteo Directo de Equipos'
+            : 'Sorteo de Orden de Elección (Draft)';
+        setWinnerAnnouncement(winnerTitle);
+
+        setTimeout(() => {
+          setWinnerAnnouncement(null);
+          if (winner === 'DIRECT_DRAW') {
+            fetch('/api/tournaments/draw-teams', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ tournamentId, assignmentMethod: 'DIRECT_DRAW' }),
+              credentials: 'include',
+            }).catch((err) => console.warn('[TeamsPreviewView] Error auto-triggering draw:', err));
+          } else {
+            if (onProceedToFixture) {
+              onProceedToFixture('DRAFT_ORDER');
+            }
+          }
+        }, 3000);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Error al enviar voto.');
+    } finally {
+      setIsSubmittingVote(false);
+    }
+  };
 
   // Handle Admin Preload Save (RF-103)
   const handleSavePreload = async () => {
@@ -177,28 +456,7 @@ export function TeamsPreviewView({
     setIsPreloadModalOpen(true);
   };
 
-  // Trigger Team Draw (Admin only, or confirmed user)
-  const handleStartDraw = async () => {
-    try {
-      setIsDrawing(true);
-      setError(null);
 
-      const res = await fetch('/api/tournaments/draw-teams', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ tournamentId }),
-        credentials: 'include',
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Error al iniciar el sorteo.');
-      }
-    } catch (err: any) {
-      setError(err.message || 'Error al iniciar el sorteo.');
-      setIsDrawing(false);
-    }
-  };
 
   const hasEnoughTeams = teams.length >= participantCount;
 
@@ -233,20 +491,181 @@ export function TeamsPreviewView({
                   <span>Editar / Precargar Equipos</span>
                 </SecondaryButton>
               )}
-
-              {isAdmin && !isDrawComplete && (
-                <PrimaryButton
-                  type="button"
-                  disabled={isDrawing || !hasEnoughTeams}
-                  onClick={handleStartDraw}
-                  className="text-xs px-4 py-2 glow-green"
-                >
-                  <Shuffle className="h-3.5 w-3.5 mr-1.5" />
-                  <span>{isDrawing ? 'Sorteando...' : 'Sortear Equipos'}</span>
-                </PrimaryButton>
-              )}
             </div>
           </div>
+
+          {/* Assignment Method Synchronized Voting & Selection (T35) */}
+          {!isDrawComplete && (
+            !hasVotingEnded ? (
+              <div className="flex flex-col gap-6 rounded-2xl border-4 border-primary/60 bg-gradient-to-b from-primary/15 via-background/90 to-primary/10 p-6 sm:p-8 shadow-2xl glow-blue text-center">
+                <div className="flex flex-col items-center justify-center gap-2">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/20 border border-primary/40 text-primary text-xs font-bold uppercase tracking-widest animate-pulse">
+                    <Clock className="h-4 w-4" /> Votación Obligatoria en Vivo (60s)
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black font-display uppercase tracking-wide text-foreground">
+                    ¿Cómo asignamos los equipos?
+                  </h2>
+                  <p className="text-xs sm:text-sm text-muted-foreground max-w-md">
+                    Hacé clic directamente en una de las dos opciones para votar antes de que termine el tiempo.
+                  </p>
+
+                  {/* Reloj en pantalla grande (T35) */}
+                  <div className="my-2 py-3 px-8 rounded-2xl bg-background/90 border-2 border-primary/50 shadow-inner flex flex-col items-center">
+                    <div className="font-mono text-5xl sm:text-6xl font-black text-primary text-glow tracking-wider">
+                      {votingCountdown.formattedTime}
+                    </div>
+                    <span className="text-[11px] font-mono uppercase tracking-widest text-muted-foreground mt-1">
+                      {votesCast}/{totalVoters} participantes ya votaron
+                    </span>
+                  </div>
+
+                  {/* Progress Bar */}
+                  <div className="w-full max-w-md h-2.5 bg-background/80 rounded-full overflow-hidden border border-border/50">
+                    <div
+                      className="h-full bg-gradient-to-r from-primary to-accent transition-all duration-300"
+                      style={{ width: `${votingCountdown.progressPercentage}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Las dos tarjetas son botones directos para votar (T35) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                  <button
+                    type="button"
+                    disabled={isSubmittingVote || Boolean(votedChoice)}
+                    onClick={() => handleConfirmVote('DIRECT_DRAW')}
+                    className={`flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-3 text-center transition-all duration-200 ${
+                      votedChoice === 'DIRECT_DRAW'
+                        ? 'border-primary bg-primary/30 text-foreground font-black shadow-2xl glow-green scale-[1.03] ring-2 ring-primary'
+                        : 'border-border/80 bg-secondary/40 text-muted-foreground hover:border-primary/60 hover:bg-secondary/70 hover:scale-[1.02]'
+                    } disabled:cursor-not-allowed`}
+                  >
+                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/20 text-primary border border-primary/40 text-3xl">
+                      🎲
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="font-display font-black text-base sm:text-lg text-primary flex items-center justify-center gap-2">
+                        Sorteo Directo de Equipos
+                        {votedChoice === 'DIRECT_DRAW' && <CheckCircle2 className="h-5 w-5 text-primary" />}
+                      </h3>
+                      <p className="text-xs text-muted-foreground">
+                        Cada jugador recibe un equipo al azar al instante mediante la ruleta animada.
+                      </p>
+                    </div>
+                    {votedChoice === 'DIRECT_DRAW' ? (
+                      <span className="text-xs font-bold text-primary bg-primary/20 px-3 py-1 rounded-full border border-primary">
+                        ✓ Tu Voto Registrado
+                      </span>
+                    ) : (
+                      <span className="text-xs font-bold text-muted-foreground bg-background/60 px-3 py-1 rounded-full border border-border">
+                        {isSubmittingVote ? 'Enviando...' : 'Clic para Votar'}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isSubmittingVote || Boolean(votedChoice)}
+                    onClick={() => handleConfirmVote('DRAFT_ORDER')}
+                    className={`flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-3 text-center transition-all duration-200 ${
+                      votedChoice === 'DRAFT_ORDER'
+                        ? 'border-accent bg-accent/30 text-foreground font-black shadow-2xl glow-orange scale-[1.03] ring-2 ring-accent'
+                        : 'border-border/80 bg-secondary/40 text-muted-foreground hover:border-accent/60 hover:bg-secondary/70 hover:scale-[1.02]'
+                    } disabled:cursor-not-allowed`}
+                  >
+                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent/20 text-accent border border-accent/40 text-3xl">
+                      📋
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="font-display font-black text-base sm:text-lg text-accent flex items-center justify-center gap-2">
+                        Sorteo de Orden de Draft
+                        {votedChoice === 'DRAFT_ORDER' && <CheckCircle2 className="h-5 w-5 text-accent" />}
+                      </h3>
+                      <p className="text-xs text-muted-foreground">
+                        Se sortea el orden de turnos (1º, 2º, 3º...) con 20 segundos por turno para elegir en vivo.
+                      </p>
+                    </div>
+                    {votedChoice === 'DRAFT_ORDER' ? (
+                      <span className="text-xs font-bold text-accent bg-accent/20 px-3 py-1 rounded-full border border-accent">
+                        ✓ Tu Voto Registrado
+                      </span>
+                    ) : (
+                      <span className="text-xs font-bold text-muted-foreground bg-background/60 px-3 py-1 rounded-full border border-border">
+                        {isSubmittingVote ? 'Enviando...' : 'Clic para Votar'}
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                {votedChoice ? (
+                  <p className="text-xs font-bold text-primary flex items-center justify-center gap-2 animate-pulse pt-2">
+                    <CheckCircle className="h-4 w-4" />
+                    ¡Voto confirmado! Al expirar el tiempo (00:00) se anunciará el ganador y se iniciará la asignación.
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground pt-2">
+                    Si hay empate al expirar los 60 segundos, el sistema desempatará automáticamente al azar.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4 rounded-xl border-2 border-primary/70 bg-gradient-to-b from-primary/15 to-secondary/30 p-5 shadow-xl glow-green">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-primary/20 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-lg bg-primary/20 text-primary">
+                      <Trophy className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <span className="font-display text-xs font-bold uppercase tracking-wider text-primary">
+                        Votación Concluida — Método Ganador
+                      </span>
+                      <h3 className="font-display text-base font-black text-foreground">
+                        {assignmentMethod === 'DIRECT_DRAW'
+                          ? 'Sorteo Directo de Equipos'
+                          : 'Sorteo de Orden de Elección (Draft por Turnos)'}
+                      </h3>
+                    </div>
+                  </div>
+                  {voteResult && (
+                    <span className="text-xs font-mono text-muted-foreground bg-background/80 px-2.5 py-1 rounded border border-border">
+                      Resultado: {voteResult.voteCounts?.DIRECT_DRAW || 0} directos vs {voteResult.voteCounts?.DRAFT_ORDER || 0} draft
+                    </span>
+                  )}
+                </div>
+
+                {voteResult?.wasDraw && (
+                  <div className="flex items-center gap-2 p-2.5 rounded-lg bg-accent/20 border border-accent/40 text-accent text-xs">
+                    <span className="font-bold">🎲 ¡Hubo Empate!</span>
+                    <span>El sistema desempató automáticamente al azar en favor de este método.</span>
+                  </div>
+                )}
+
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-1">
+                  <p className="text-xs text-muted-foreground">
+                    {assignmentMethod === 'DIRECT_DRAW'
+                      ? 'Cualquier participante confirmado puede iniciar el sorteo. Los equipos se distribuirán al azar.'
+                      : 'Cualquier participante confirmado puede iniciar el sorteo de orden. Se establecerán turnos de 20 segundos.'}
+                  </p>
+
+                  <PrimaryButton
+                    type="button"
+                    disabled={isDrawing || (assignmentMethod === 'DIRECT_DRAW' && !hasEnoughTeams)}
+                    onClick={() => handleStartDraw()}
+                    className="text-xs px-6 py-3 glow-green font-bold shrink-0 w-full sm:w-auto"
+                  >
+                    <Shuffle className="h-4 w-4 mr-2" />
+                    <span>
+                      {isDrawing
+                        ? 'Sorteando...'
+                        : assignmentMethod === 'DRAFT_ORDER'
+                        ? 'Sortear Orden de Elección (Draft) →'
+                        : 'Ejecutar Sorteo Directo de Equipos →'}
+                    </span>
+                  </PrimaryButton>
+                </div>
+              </div>
+            )
+          )}
 
           {error && (
             <div className="flex items-center gap-2 rounded bg-destructive/15 border border-destructive/40 p-3 text-xs text-destructive">
@@ -271,7 +690,7 @@ export function TeamsPreviewView({
             </span>
           </div>
 
-          {!hasEnoughTeams && (
+          {!hasEnoughTeams && assignmentMethod === 'DIRECT_DRAW' && (
             <div className="flex items-center gap-2 rounded bg-destructive/15 border border-destructive/40 p-3 text-xs text-destructive">
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>
@@ -296,9 +715,14 @@ export function TeamsPreviewView({
                 Paso {drawStep?.step || 1} de {drawStep?.totalSteps || participantCount}
               </span>
               <h3 className="font-display text-lg text-foreground font-bold">
-                Asignando equipo a:{' '}
+                {drawStep?.method === 'DRAFT_ORDER' || assignmentMethod === 'DRAFT_ORDER'
+                  ? 'Sorteando turno para:'
+                  : 'Asignando equipo a:'}{' '}
                 <span className="text-primary font-black uppercase text-glow">
-                  {drawStep?.participantName || 'Participante'}
+                  {drawStep?.targetPlayerName ||
+                    drawStep?.participantName ||
+                    participants.find((p) => p.id === drawStep?.targetParticipantId)?.name ||
+                    'Participante'}
                 </span>
               </h3>
             </div>
@@ -316,8 +740,61 @@ export function TeamsPreviewView({
         </Panel>
       )}
 
-      {/* Final Assignments Display (when draw is complete) */}
-      {isDrawComplete && (
+      {/* Result 1: Draft Order Sorteado (T31) */}
+      {isDrawComplete && (draftOrderResults.length > 0 || assignmentMethod === 'DRAFT_ORDER') && (
+        <Panel title="Orden de Elección de Equipos (Draft)" subtitle="Definición de Turnos Oficial">
+          <div className="space-y-4 py-2">
+            <div className="text-center space-y-1 pb-2 border-b border-border/60">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-accent/20 border border-accent glow-orange mb-2">
+                <Trophy className="h-6 w-6 text-accent" />
+              </div>
+              <h3 className="font-display text-xl font-black text-foreground uppercase text-glow">
+                ¡Orden de Draft Sorteado!
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Los turnos quedaron definidos. Ahora cada jugador elegirá su equipo en este orden exacto.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {draftOrderResults.map((entry) => (
+                <div
+                  key={entry.participantId}
+                  className="flex items-center justify-between p-3 rounded-md border border-accent/50 bg-secondary/40"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent/20 text-accent font-mono font-bold text-xs">
+                      #{entry.order}
+                    </span>
+                    <span className="font-display font-bold text-sm text-foreground">
+                      {entry.participantName}
+                    </span>
+                  </div>
+                  <span className="font-mono text-xs font-bold text-accent uppercase">
+                    {entry.order}º Turno
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {onProceedToFixture && (
+              <div className="pt-4 flex justify-center">
+                <PrimaryButton
+                  type="button"
+                  onClick={() => onProceedToFixture('DRAFT_ORDER')}
+                  className="w-full sm:w-auto px-8 glow-orange font-bold uppercase tracking-wide"
+                >
+                  <span>Ir a Elección de Equipos (Draft)</span>
+                  <ArrowRight className="h-4 w-4 ml-1.5" />
+                </PrimaryButton>
+              </div>
+            )}
+          </div>
+        </Panel>
+      )}
+
+      {/* Result 2: Direct Team Assignments Display (when direct draw is complete) */}
+      {isDrawComplete && draftOrderResults.length === 0 && assignmentMethod === 'DIRECT_DRAW' && (
         <Panel title="Resultado del Sorteo de Equipos" subtitle="Asignación Oficial de la Juntada">
           <div className="space-y-4 py-2">
             <div className="text-center space-y-1 pb-2 border-b border-border/60">
@@ -353,30 +830,33 @@ export function TeamsPreviewView({
                       </div>
                     );
                   })
-                : Object.entries(finalAssignments).map(([partId, teamName], idx) => (
-                    <div
-                      key={partId}
-                      className="flex items-center justify-between p-3 rounded-md border border-primary/50 bg-secondary/40"
-                    >
-                      <span className="font-display font-bold text-sm text-foreground">
-                        Participante {idx + 1}
-                      </span>
-                      <span className="font-mono text-xs font-bold text-primary uppercase">
-                        {teamName}
-                      </span>
-                    </div>
-                  ))}
+                : Object.entries(finalAssignments).map(([partId, teamName], idx) => {
+                    const matched = participants.find((p) => p.id === partId);
+                    return (
+                      <div
+                        key={partId}
+                        className="flex items-center justify-between p-3 rounded-md border border-primary/50 bg-secondary/40"
+                      >
+                        <span className="font-display font-bold text-sm text-foreground">
+                          {matched ? matched.name : `Participante ${idx + 1}`}
+                        </span>
+                        <span className="font-mono text-xs font-bold text-primary uppercase">
+                          {teamName}
+                        </span>
+                      </div>
+                    );
+                  })}
             </div>
 
             {onProceedToFixture && (
               <div className="pt-4 flex justify-center">
                 <PrimaryButton
                   type="button"
-                  onClick={onProceedToFixture}
-                  className="w-full sm:w-auto px-8 glow-green"
+                  onClick={() => onProceedToFixture('DIRECT_DRAW')}
+                  className="w-full sm:w-auto px-8 glow-green font-bold uppercase tracking-wide"
                 >
                   <span>Continuar al Fixture y Partidos</span>
-                  <ArrowRight className="h-4 w-4" />
+                  <ArrowRight className="h-4 w-4 ml-1.5" />
                 </PrimaryButton>
               </div>
             )}
@@ -481,6 +961,31 @@ export function TeamsPreviewView({
                 <span>{isSavingPreload ? 'Guardando...' : 'Guardar Equipos'}</span>
               </PrimaryButton>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cartel Grande: Anuncio del Método Ganador (3 segundos) (T35) */}
+      {winnerAnnouncement && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/85 backdrop-blur-md animate-in fade-in zoom-in-95 duration-200">
+          <div className="mx-4 max-w-lg w-full rounded-2xl border-4 border-primary bg-background/95 p-8 text-center shadow-[0_0_50px_rgba(74,222,128,0.35)] space-y-4">
+            <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-primary/20 border-2 border-primary text-primary">
+              <Trophy className="h-10 w-10 animate-bounce" />
+            </div>
+            <span className="text-xs font-bold uppercase tracking-widest text-primary">
+              ¡Votación Concluida!
+            </span>
+            <h2 className="text-3xl font-black text-foreground">
+              Método Ganador: <span className="text-primary text-glow">{winnerAnnouncement}</span>
+            </h2>
+            {voteResult?.wasDraw && (
+              <p className="text-xs text-accent font-semibold">
+                🎲 Hubo empate y el sistema desempató automáticamente al azar.
+              </p>
+            )}
+            <p className="text-sm text-muted-foreground animate-pulse">
+              Iniciando asignación automáticamente...
+            </p>
           </div>
         </div>
       )}

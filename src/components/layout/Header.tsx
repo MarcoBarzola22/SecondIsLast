@@ -122,14 +122,23 @@ export function Header({ currentView, onNavigate, cloudTournament }: HeaderProps
   };
 
   const isStepEnabled = (stepId: ViewType): boolean => {
-    // Lobby, Votacion, Tabla, and Reglamento are ALWAYS accessible
+    // Lobby, Tabla, and Reglamento are ALWAYS accessible
     if (
       stepId === 'lobby' ||
-      stepId === 'votacion' ||
       stepId === 'tabla' ||
       stepId === 'reglamento'
     )
       return true;
+
+    // Votación is ONLY accessible when a cloudTournament is in VOTING_FORMAT or later
+    if (stepId === 'votacion') {
+      const status = cloudTournament?.status;
+      return (
+        status === 'VOTING_FORMAT' ||
+        status === 'VOTING_THEME' ||
+        status === 'IN_PROGRESS'
+      );
+    }
 
     if (!activeTournament) {
       return false;
@@ -440,10 +449,10 @@ export function Header({ currentView, onNavigate, cloudTournament }: HeaderProps
             })}
           </nav>
 
-          {(cloudTournament || activeTournament) && (
-            <DangerButton onClick={handleAbandon} title="Abandonar o reiniciar torneo activo">
+          {isAdmin && (cloudTournament || activeTournament) && (
+            <DangerButton onClick={handleAbandon} title="Abandonar o reiniciar torneo activo en cualquier fase">
               <LogOut className="h-3.5 w-3.5" />
-              <span className="hidden lg:inline">Abandonar / Reiniciar</span>
+              <span className="hidden sm:inline">Abandonar / Reiniciar Torneo</span>
             </DangerButton>
           )}
         </div>

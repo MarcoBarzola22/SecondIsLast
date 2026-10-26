@@ -2,8 +2,8 @@ import { Router, Request, Response, CookieOptions } from 'express';
 import { config } from '../config/env.js';
 import { getGoogleAuthUrl, getGoogleUserFromCode } from '../auth/google.js';
 import { userService } from '../services/userService.js';
-import { authMiddleware } from '../middleware/authMiddleware.js';
-import { whitelistMiddleware } from '../middleware/whitelistMiddleware.js';
+import { optionalAuthMiddleware } from '../middleware/authMiddleware.js';
+import { whitelistService } from '../services/whitelistService.js';
 
 const router = Router();
 
@@ -60,22 +60,28 @@ router.get('/google/callback', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/auth/me - Return authenticated user profile (RF-88, RF-89)
-router.get('/me', authMiddleware, whitelistMiddleware, async (req: Request, res: Response) => {
+// GET /api/auth/me - Return authenticated user profile or { user: null } without noisy 401s (RF-88, RF-89)
+router.get('/me', optionalAuthMiddleware, async (req: Request, res: Response) => {
   if (!req.user) {
-    res.status(401).json({ error: 'No autorizado. Iniciá sesión para continuar.' });
+    res.status(200).json({ user: null });
+    return;
+  }
+
+  const isWhitelisted = await whitelistService.isEmailWhitelisted(req.user.email);
+  if (!isWhitelisted) {
+    res.status(403).json({ error: 'No estás en la lista blanca de la juntada. Pedile al admin que te habilite' });
     return;
   }
 
   try {
     const freshUser = await userService.findById(req.user.id);
     if (!freshUser) {
-      res.status(200).json(req.user);
+      res.status(200).json({ ...req.user, user: req.user });
       return;
     }
-    res.status(200).json(freshUser);
+    res.status(200).json({ ...freshUser, user: freshUser });
   } catch {
-    res.status(200).json(req.user);
+    res.status(200).json({ ...req.user, user: req.user });
   }
 });
 

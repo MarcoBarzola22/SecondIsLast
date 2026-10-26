@@ -43,6 +43,7 @@ enum MatchStatus {
 enum VotePhase {
   FORMAT
   THEME
+  ASSIGNMENT_METHOD
 }
 
 model User {
@@ -127,8 +128,8 @@ model Match {
   round                       Int
   leg                         Int                    @default(1) // 1 = Ida / Partido Único, 2 = Vuelta
   seriesId                    String?                // Agrupa partidos de la misma serie en Ida y Vuelta
-  homeParticipantId           String
-  homeParticipant             TournamentParticipant  @relation("HomeParticipant", fields: [homeParticipantId], references: [id])
+  homeParticipantId           String?
+  homeParticipant             TournamentParticipant? @relation("HomeParticipant", fields: [homeParticipantId], references: [id])
   awayParticipantId           String?
   awayParticipant             TournamentParticipant? @relation("AwayParticipant", fields: [awayParticipantId], references: [id])
   status                      MatchStatus            @default(PENDING_SUBMISSION)

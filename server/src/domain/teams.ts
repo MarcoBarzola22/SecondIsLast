@@ -180,9 +180,17 @@ export interface DrawAnimationStep {
   isFinal: boolean;
 }
 
+export interface DraftOrderEntry {
+  order: number;
+  participantId: PlayerId;
+  participantName: string;
+}
+
 export interface DrawPlan {
   steps: DrawAnimationStep[];
   finalAssignments: Record<PlayerId, string>;
+  method?: 'DIRECT_DRAW' | 'DRAFT_ORDER';
+  draftOrder?: DraftOrderEntry[];
 }
 
 /**
@@ -225,5 +233,47 @@ export function createDrawPlan(
   return {
     steps,
     finalAssignments,
+    method: 'DIRECT_DRAW',
+  };
+}
+
+/**
+ * Generates deterministic draft pick order plan (1st, 2nd, 3rd pick...) without assigning teams.
+ */
+export function createDraftOrderPlan(
+  participants: Array<{ id: PlayerId; name: string }>,
+  rng: RngFn = Math.random
+): DrawPlan {
+  const shuffledParticipants = shuffle(participants, rng);
+  const steps: DrawAnimationStep[] = [];
+  const draftOrder: DraftOrderEntry[] = [];
+  const totalSteps = shuffledParticipants.length;
+
+  for (let i = 0; i < shuffledParticipants.length; i++) {
+    const p = shuffledParticipants[i]!;
+    const orderNum = i + 1;
+    const label = `${orderNum}º en elegir`;
+
+    draftOrder.push({
+      order: orderNum,
+      participantId: p.id,
+      participantName: p.name,
+    });
+
+    steps.push({
+      step: orderNum,
+      totalSteps,
+      participantId: p.id,
+      participantName: p.name,
+      assignedTeam: label,
+      isFinal: i === shuffledParticipants.length - 1,
+    });
+  }
+
+  return {
+    steps,
+    finalAssignments: {},
+    method: 'DRAFT_ORDER',
+    draftOrder,
   };
 }

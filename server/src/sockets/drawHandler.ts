@@ -9,8 +9,11 @@ export interface DrawAnimatedPayload {
   currentItem: string;
   targetParticipantId?: string;
   participantName?: string;
+  targetPlayerName?: string;
   isFinal: boolean;
   assignments?: Record<string, string>;
+  method?: 'DIRECT_DRAW' | 'DRAFT_ORDER';
+  draftOrder?: Array<{ order: number; participantId: string; participantName: string }>;
 }
 
 export interface ActiveDrawSession {
@@ -23,6 +26,8 @@ export interface ActiveDrawSession {
   resolvedState: {
     isComplete: boolean;
     assignments: Record<string, string>;
+    method?: 'DIRECT_DRAW' | 'DRAFT_ORDER';
+    draftOrder?: Array<{ order: number; participantId: string; participantName: string }>;
   };
 }
 
@@ -49,7 +54,7 @@ export function startDrawAnimation(
   tournamentId: string,
   plan: DrawPlan,
   onComplete?: () => Promise<void> | void,
-  intervalMs: number = 650
+  intervalMs: number = 1200
 ): ActiveDrawSession {
   // Clear any existing session for this tournament
   const existing = activeDrawSessions.get(tournamentId);
@@ -66,6 +71,8 @@ export function startDrawAnimation(
     resolvedState: {
       isComplete: false,
       assignments: plan.finalAssignments,
+      method: plan.method,
+      draftOrder: plan.draftOrder,
     },
   };
 
@@ -83,8 +90,11 @@ export function startDrawAnimation(
       currentItem: stepData.assignedTeam,
       targetParticipantId: stepData.participantId,
       participantName: stepData.participantName,
+      targetPlayerName: stepData.participantName,
       isFinal: stepData.isFinal,
       assignments: stepData.isFinal ? plan.finalAssignments : undefined,
+      method: plan.method,
+      draftOrder: stepData.isFinal ? plan.draftOrder : undefined,
     };
 
     if (io) {

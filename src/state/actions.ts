@@ -127,5 +127,10 @@ export type Action =
       match?: any;
       bracket?: any[];
       unblockedParticipants?: string[];
+    }
+  | {
+      type: 'HYDRATE_TOURNAMENT';
+      payload: any;
     };
+
 

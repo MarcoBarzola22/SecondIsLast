@@ -337,7 +337,7 @@ export class MatchService {
     }
 
     // RF-106 & RF-112: Exclusively the Home player can submit scores. Admins cannot override.
-    if (!user.playerId || match.homeParticipant.playerId !== user.playerId) {
+    if (!user.playerId || !match.homeParticipant || match.homeParticipant.playerId !== user.playerId) {
       throw new ForbiddenError(
         'Acceso denegado: solo el participante Local asignado puede cargar el resultado del partido.'
       );
@@ -380,7 +380,7 @@ export class MatchService {
     // Resolve penaltiesWinnerId
     let resolvedPenaltiesWinnerId = payload.penaltiesWinnerId ?? null;
     if (resolvedPenaltiesWinnerId) {
-      if (resolvedPenaltiesWinnerId === match.homeParticipant.playerId) {
+      if (match.homeParticipant && resolvedPenaltiesWinnerId === match.homeParticipant.playerId) {
         resolvedPenaltiesWinnerId = match.homeParticipantId;
       } else if (
         match.awayParticipant &&
@@ -393,7 +393,7 @@ export class MatchService {
     // Pure Domain Handshake Transition
     const matchState: MatchState = {
       id: match.id,
-      homeParticipantId: match.homeParticipantId,
+      homeParticipantId: match.homeParticipantId || '',
       awayParticipantId: match.awayParticipantId,
       status: match.status as any,
       homeScore: match.homeScore,
@@ -411,7 +411,7 @@ export class MatchService {
 
     let nextState: MatchState;
     try {
-      nextState = transitionMatchSubmit(matchState, match.homeParticipantId, {
+      nextState = transitionMatchSubmit(matchState, match.homeParticipantId!, {
         homeScore: payload.homeScore,
         awayScore: payload.awayScore,
         homeYellowCards: payload.homeYellowCards,
@@ -469,13 +469,19 @@ export class MatchService {
     })) as MatchWithParticipants;
 
     if (io) {
-      io.to(`tournament:${match.tournamentId}`).emit('match:submitted', {
+      const submittedPayload = {
         matchId: updatedMatch.id,
         version: updatedMatch.version,
         homeScore: updatedMatch.homeScore,
         awayScore: updatedMatch.awayScore,
         penaltiesWinnerId: updatedMatch.penaltiesWinnerId,
-      });
+        match: updatedMatch,
+        awayPlayerId: updatedMatch.awayParticipant?.playerId,
+        homePlayerId: updatedMatch.homeParticipant?.playerId,
+        awayEmail: (updatedMatch.awayParticipant?.player as any)?.user?.email,
+      };
+      io.to(`tournament:${match.tournamentId}`).emit('match:submitted', submittedPayload);
+      io.emit('match:submitted', submittedPayload);
     }
 
     return updatedMatch;
@@ -504,11 +510,24 @@ export class MatchService {
     }
 
     // RF-108 & RF-112: Exclusively the Away player can reject. Admins cannot override.
-    if (
-      !match.awayParticipant ||
-      !user.playerId ||
-      match.awayParticipant.playerId !== user.playerId
-    ) {
+    let isAway = Boolean(
+      (user.playerId && match.awayParticipant?.playerId === user.playerId) ||
+      (user.player?.id && match.awayParticipant?.playerId === user.player.id) ||
+      (user.id && (match.awayParticipant?.player as any)?.userId === user.id) ||
+      (user.email && (match.awayParticipant?.player as any)?.user?.email?.toLowerCase() === user.email?.toLowerCase())
+    );
+
+    if (!isAway && user.id) {
+      const dbUser = await this.prisma.user.findUnique({
+        where: { id: user.id },
+        select: { playerId: true, email: true },
+      });
+      if (dbUser?.playerId && match.awayParticipant?.playerId === dbUser.playerId) {
+        isAway = true;
+      }
+    }
+
+    if (!match.awayParticipant || !isAway) {
       throw new ForbiddenError(
         'Acceso denegado: solo el participante Visitante asignado puede rechazar el resultado del partido.'
       );
@@ -516,7 +535,7 @@ export class MatchService {
 
     const matchState: MatchState = {
       id: match.id,
-      homeParticipantId: match.homeParticipantId,
+      homeParticipantId: match.homeParticipantId || '',
       awayParticipantId: match.awayParticipantId,
       status: match.status as any,
       homeScore: match.homeScore,
@@ -615,11 +634,24 @@ export class MatchService {
     }
 
     // RF-108 & RF-112: Exclusively the Away player can confirm. Admins cannot override.
-    if (
-      !match.awayParticipant ||
-      !user.playerId ||
-      match.awayParticipant.playerId !== user.playerId
-    ) {
+    let isAway = Boolean(
+      (user.playerId && match.awayParticipant?.playerId === user.playerId) ||
+      (user.player?.id && match.awayParticipant?.playerId === user.player.id) ||
+      (user.id && (match.awayParticipant?.player as any)?.userId === user.id) ||
+      (user.email && (match.awayParticipant?.player as any)?.user?.email?.toLowerCase() === user.email?.toLowerCase())
+    );
+
+    if (!isAway && user.id) {
+      const dbUser = await this.prisma.user.findUnique({
+        where: { id: user.id },
+        select: { playerId: true, email: true },
+      });
+      if (dbUser?.playerId && match.awayParticipant?.playerId === dbUser.playerId) {
+        isAway = true;
+      }
+    }
+
+    if (!match.awayParticipant || !isAway) {
       throw new ForbiddenError(
         'Acceso denegado: solo el participante Visitante asignado puede confirmar el resultado del partido.'
       );
@@ -627,7 +659,7 @@ export class MatchService {
 
     const matchState: MatchState = {
       id: match.id,
-      homeParticipantId: match.homeParticipantId,
+      homeParticipantId: match.homeParticipantId || '',
       awayParticipantId: match.awayParticipantId,
       status: match.status as any,
       homeScore: match.homeScore,

@@ -50,11 +50,14 @@ import {
 } from '../domain/awardsAndRankings';
 import type {
   ActiveTournament,
+  GroupId,
   GroupMatch,
   LeagueMatch,
+  MatchFormat,
   PlayerStats,
   Series,
   SeriesId,
+  TournamentPhase,
   TournamentSummary,
   TournamentType,
 } from '../domain/types';
@@ -1560,7 +1563,198 @@ export function appReducer(state: AppData, action: Action): AppData {
       };
     }
 
+    case 'HYDRATE_TOURNAMENT': {
+      if (!action.payload) return state;
+      const hydrated = buildActiveTournamentFromPayload(action.payload);
+      if (!hydrated) return state;
+
+      // Ensure all participants from payload are registered in state.players
+      const newPlayers = [...state.players];
+      if (Array.isArray(action.payload.participants)) {
+        for (const part of action.payload.participants) {
+          const pId = part.playerId || part.player?.id || part.id;
+          if (pId && !newPlayers.some((p) => p.id === pId)) {
+            newPlayers.push({
+              id: pId,
+              firstName: part.player?.firstName || part.name?.split(' ')[0] || 'Jugador',
+              lastName: part.player?.lastName || part.name?.split(' ').slice(1).join(' ') || '',
+              createdAt: new Date().toISOString(),
+            });
+          }
+        }
+      }
+
+      return {
+        ...state,
+        players: newPlayers,
+        activeTournament: hydrated,
+      };
+    }
+
     default:
       return state;
   }
+}
+
+/**
+ * Builds an ActiveTournament domain object from a server/database tournament payload.
+ */
+export function buildActiveTournamentFromPayload(payload: any): ActiveTournament | null {
+  if (!payload || !payload.id) return null;
+
+  const rawFormat = (payload.format || payload.tournamentType || 'BRACKET').toUpperCase();
+  let tournamentType: TournamentType = 'bracket';
+  if (rawFormat === 'LEAGUE') tournamentType = 'league';
+  else if (rawFormat === 'GROUP_STAGE') tournamentType = 'group_stage';
+  else if (rawFormat === 'LEAGUE_PLAYOFFS') tournamentType = 'league_playoffs';
+  else if (rawFormat === 'DOUBLE_ELIMINATION') tournamentType = 'double_elimination';
+
+  const rawMatchFormat = (payload.matchFormat || 'SINGLE_MATCH').toUpperCase();
+  const matchFormat: MatchFormat = rawMatchFormat === 'TWO_LEGGED' ? 'two_legged' : 'single_match';
+
+  const participants = Array.isArray(payload.participants) ? payload.participants : [];
+  const participantIds: string[] = participants
+    .map((p: any) => p.playerId || p.player?.id || p.id)
+    .filter(Boolean);
+
+  const teams: Record<string, string> = {};
+  for (const p of participants) {
+    const id = p.playerId || p.player?.id || p.id;
+    if (id) {
+      teams[id] = p.team || p.teamName || '';
+    }
+  }
+
+  const draftOrder: string[] = [...participants]
+    .sort((a: any, b: any) => (a.seed ?? 999) - (b.seed ?? 999))
+    .map((p: any) => p.playerId || p.player?.id || p.id)
+    .filter(Boolean);
+
+  const rawMatches = Array.isArray(payload.matches) ? payload.matches : [];
+
+  const byes: string[] = rawMatches
+    .filter((m: any) => m.isBye)
+    .map((m: any) => m.homeParticipant?.playerId || m.homeParticipant?.player?.id || m.homeParticipantId)
+    .filter(Boolean);
+
+  const seriesMap = new Map<string, any>();
+  const leagueMatches: LeagueMatch[] = [];
+  const groupMatches: GroupMatch[] = [];
+
+  for (const m of rawMatches) {
+    const seriesId = m.seriesId || m.id;
+    const homeId = m.homeParticipant?.playerId || m.homeParticipant?.player?.id || m.homeParticipantId || null;
+    const awayId = m.awayParticipant?.playerId || m.awayParticipant?.player?.id || m.awayParticipantId || null;
+
+    if (tournamentType === 'league' || tournamentType === 'league_playoffs') {
+      leagueMatches.push({
+        id: m.seriesId || m.id,
+        round: m.round,
+        playerA: homeId || '',
+        playerB: awayId || '',
+        scoreA: m.homeScore,
+        scoreB: m.awayScore,
+        cardsA: { yellow: m.homeYellowCards ?? 0, red: m.homeRedCards ?? 0 },
+        cardsB: { yellow: m.awayYellowCards ?? 0, red: m.awayRedCards ?? 0 },
+        confirmed: m.status === 'CLOSED',
+        status: m.status,
+        version: m.version,
+      });
+    } else if (tournamentType === 'group_stage') {
+      const gid: GroupId = seriesId.includes('GB') ? 'B' : 'A';
+      groupMatches.push({
+        id: m.seriesId || m.id,
+        groupId: gid,
+        round: m.round,
+        playerA: homeId || '',
+        playerB: awayId || '',
+        scoreA: m.homeScore,
+        scoreB: m.awayScore,
+        cardsA: { yellow: m.homeYellowCards ?? 0, red: m.homeRedCards ?? 0 },
+        cardsB: { yellow: m.awayYellowCards ?? 0, red: m.awayRedCards ?? 0 },
+        confirmed: m.status === 'CLOSED',
+        status: m.status,
+        version: m.version,
+      });
+    }
+
+    if (!seriesMap.has(seriesId)) {
+      let roundName: any = 'semifinal';
+      const sLower = seriesId.toLowerCase();
+      if (sLower.startsWith('r16') || sLower.includes('octavos')) roundName = 'round_of_16';
+      else if (sLower.startsWith('qf') || sLower.includes('cuartos')) roundName = 'quarterfinal';
+      else if (sLower.startsWith('sf') || sLower.includes('semis')) roundName = 'semifinal';
+      else if (sLower === 'f' || sLower.includes('final')) roundName = 'final';
+      else if (sLower === 'tp' || sLower.includes('tercer')) roundName = 'third_place';
+
+      seriesMap.set(seriesId, {
+        id: seriesId,
+        round: roundName,
+        playerA: homeId,
+        playerB: awayId,
+        leg1: {
+          scoreA: m.homeScore,
+          scoreB: m.awayScore,
+          cardsA: { yellow: m.homeYellowCards ?? 0, red: m.homeRedCards ?? 0 },
+          cardsB: { yellow: m.awayYellowCards ?? 0, red: m.awayRedCards ?? 0 },
+        },
+        leg2: {
+          scoreA: null,
+          scoreB: null,
+          cardsA: { yellow: 0, red: 0 },
+          cardsB: { yellow: 0, red: 0 },
+        },
+        penaltyWinner: m.penaltiesWinner?.playerId || m.penaltiesWinnerId || null,
+        confirmed: m.status === 'CLOSED',
+        winnerTo: null,
+        loserTo: null,
+        isBye: Boolean(m.isBye),
+        status: m.status,
+        version: m.version,
+      });
+    } else {
+      const s = seriesMap.get(seriesId)!;
+      if (m.leg === 2) {
+        s.leg2 = {
+          scoreA: m.awayScore,
+          scoreB: m.homeScore,
+          cardsA: { yellow: m.awayYellowCards ?? 0, red: m.awayRedCards ?? 0 },
+          cardsB: { yellow: m.homeYellowCards ?? 0, red: m.homeRedCards ?? 0 },
+        };
+        if (m.status !== 'CLOSED') {
+          s.confirmed = false;
+        }
+      }
+    }
+  }
+
+  const series = Array.from(seriesMap.values());
+
+  const phase: TournamentPhase =
+    payload.status === 'VOTING_THEME'
+      ? 'theme'
+      : tournamentType === 'league'
+      ? 'league'
+      : tournamentType === 'group_stage'
+      ? 'group_stage'
+      : tournamentType === 'double_elimination'
+      ? 'double_elimination'
+      : 'bracket';
+
+  return {
+    id: payload.id,
+    createdAt: payload.createdAt || new Date().toISOString(),
+    phase,
+    tournamentType,
+    matchFormat,
+    participantIds,
+    theme: payload.theme || null,
+    draftOrder: draftOrder.length > 0 ? draftOrder : participantIds,
+    teams,
+    byes,
+    series,
+    leagueMatches: leagueMatches.length > 0 ? leagueMatches : undefined,
+    groupMatches: groupMatches.length > 0 ? groupMatches : undefined,
+    matches: rawMatches,
+  };
 }

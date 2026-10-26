@@ -8,7 +8,7 @@ export interface RawFixtureMatch {
   round: number;
   leg: number;
   seriesId: string;
-  homeParticipantId: string;
+  homeParticipantId: string | null;
   awayParticipantId: string | null;
   status: 'PENDING_SUBMISSION' | 'PENDING_CONFIRMATION' | 'CLOSED';
   isBye: boolean;
@@ -121,7 +121,7 @@ export function generateTournamentFixture(options: FixtureOptions): GeneratedFix
           round: roundNum,
           leg: 1,
           seriesId: s.id,
-          homeParticipantId: s.playerA || 'TBD',
+          homeParticipantId: s.playerA || null,
           awayParticipantId: null,
           status: 'CLOSED',
           isBye: true,
@@ -134,7 +134,7 @@ export function generateTournamentFixture(options: FixtureOptions): GeneratedFix
           round: roundNum,
           leg: 1,
           seriesId: s.id,
-          homeParticipantId: s.playerA || 'TBD',
+          homeParticipantId: s.playerA || null,
           awayParticipantId: s.playerB || null,
           status: 'PENDING_SUBMISSION',
           isBye: false,
@@ -148,7 +148,7 @@ export function generateTournamentFixture(options: FixtureOptions): GeneratedFix
             round: roundNum,
             leg: 2,
             seriesId: s.id,
-            homeParticipantId: s.playerB || 'TBD',
+            homeParticipantId: s.playerB || null,
             awayParticipantId: s.playerA || null,
             status: 'PENDING_SUBMISSION',
             isBye: false,
@@ -186,7 +186,7 @@ export function generateTournamentFixture(options: FixtureOptions): GeneratedFix
         round: roundNum,
         leg: 1,
         seriesId: s.id,
-        homeParticipantId: s.playerA || 'TBD',
+        homeParticipantId: s.playerA || null,
         awayParticipantId: s.playerB || null,
         status: isSeriesBye ? 'CLOSED' : 'PENDING_SUBMISSION',
         isBye: isSeriesBye,
@@ -199,7 +199,7 @@ export function generateTournamentFixture(options: FixtureOptions): GeneratedFix
           round: roundNum,
           leg: 2,
           seriesId: s.id,
-          homeParticipantId: s.playerB || 'TBD',
+          homeParticipantId: s.playerB || null,
           awayParticipantId: s.playerA || null,
           status: 'PENDING_SUBMISSION',
           isBye: false,

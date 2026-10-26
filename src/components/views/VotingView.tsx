@@ -22,6 +22,7 @@ import { Panel } from '../ui/Panel';
 export interface VoteEndedPayload {
   phase: 'FORMAT' | 'THEME';
   winner: string;
+  matchFormat?: 'SINGLE_MATCH' | 'TWO_LEGGED' | string;
   wasDraw: boolean;
   tiedOptions?: string[];
   voteCounts: Record<string, number>;
@@ -99,8 +100,10 @@ export function VotingView({
   const [totalVoters, setTotalVoters] = useState<number>(initialTotalVoters);
   const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
   const [selectedMatchFormat, setSelectedMatchFormat] = useState<'SINGLE_MATCH' | 'TWO_LEGGED'>('SINGLE_MATCH');
+  const [isVoteConfirmed, setIsVoteConfirmed] = useState<boolean>(false);
   const [voteResult, setVoteResult] = useState<VoteEndedPayload | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isAdvancingPhase, setIsAdvancingPhase] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const countdown = useCountdown(expiresAt, 60);
@@ -121,6 +124,7 @@ export function VotingView({
       setTotalVoters(payload.totalVoters || 4);
       setVotesCast(0);
       setSelectedChoice(null);
+      setIsVoteConfirmed(false);
       setVoteResult(null);
       setError(null);
     };
@@ -176,6 +180,7 @@ export function VotingView({
             }
             if (data.tournament.myVote || data.myVote) {
               setSelectedChoice(data.tournament.myVote || data.myVote);
+              setIsVoteConfirmed(true);
             }
             if (data.tournament.myMatchFormat || data.myMatchFormat) {
               setSelectedMatchFormat(data.tournament.myMatchFormat || data.myMatchFormat);
@@ -232,15 +237,38 @@ export function VotingView({
     }
   }, [countdown.isExpired, voteResult, tournamentId, expiresAt]);
 
-  // Submit vote to server
-  const handleVote = useCallback(
+  // Trigger phase advance to Equipos/Temática (T32: Autonomía total)
+  const handleAdvancePhase = useCallback(async () => {
+    if (isAdvancingPhase) return;
+    try {
+      setIsAdvancingPhase(true);
+      setError(null);
+      const res = await fetch('/api/tournaments/advance-phase', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ tournamentId, targetStatus: 'VOTING_THEME' }),
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Error al avanzar a la siguiente fase.');
+      }
+      onProceedNext?.();
+    } catch (err: any) {
+      setError(err.message || 'Error al avanzar a la siguiente fase.');
+    } finally {
+      setIsAdvancingPhase(false);
+    }
+  }, [isAdvancingPhase, tournamentId, onProceedNext]);
+
+  // Explicit submit vote to server (Item 2)
+  const handleConfirmVote = useCallback(
     async (choice: string) => {
-      if (!isAuthenticated || isSubmitting || voteResult) return;
+      if (!isAuthenticated || isSubmitting || voteResult || isVoteConfirmed) return;
 
       try {
         setIsSubmitting(true);
         setError(null);
-        setSelectedChoice(choice);
 
         const res = await fetch('/api/tournaments/vote', {
           method: 'POST',
@@ -259,6 +287,8 @@ export function VotingView({
           throw new Error(data.error || 'Error al emitir el voto.');
         }
 
+        setIsVoteConfirmed(true);
+
         if (data.result) {
           setVoteResult(data.result);
         }
@@ -271,7 +301,7 @@ export function VotingView({
         setIsSubmitting(false);
       }
     },
-    [isAuthenticated, isSubmitting, voteResult, phase, selectedMatchFormat, tournamentId]
+    [isAuthenticated, isSubmitting, voteResult, isVoteConfirmed, phase, selectedMatchFormat, tournamentId]
   );
 
   const formatWinnerName = voteResult
@@ -361,13 +391,26 @@ export function VotingView({
               <Trophy className="h-8 w-8 text-primary" />
             </div>
 
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground font-mono">
                 Formato Electo para la Juntada
               </span>
               <h3 className="font-display text-2xl sm:text-3xl font-black text-foreground text-glow uppercase">
                 {formatWinnerName}
               </h3>
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-secondary/80 border border-border text-xs font-semibold text-foreground mt-2">
+                {voteResult.matchFormat === 'TWO_LEGGED' ? (
+                  <>
+                    <span className="text-accent text-sm">🔄</span>
+                    <span className="text-accent font-bold">Modalidad: Ida y Vuelta (Series de 2)</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-primary text-sm">⚽</span>
+                    <span className="text-primary font-bold">Modalidad: Partido Único (90 min)</span>
+                  </>
+                )}
+              </div>
             </div>
 
             {/* Tie-break Alert (RF-101) */}
@@ -409,14 +452,16 @@ export function VotingView({
               </div>
             </div>
 
-            <div className="pt-4 flex justify-center">
+            {/* Advance Control (T32: Autonomía total de participantes) */}
+            <div className="pt-4 flex flex-col items-center justify-center gap-2">
               <PrimaryButton
                 type="button"
-                onClick={() => onProceedNext?.()}
-                className="w-full sm:w-auto px-8 glow-green"
+                disabled={isAdvancingPhase}
+                onClick={handleAdvancePhase}
+                className="w-full sm:w-auto px-8 glow-green font-bold uppercase tracking-wider text-sm py-3"
               >
-                <span>Continuar a Temática y Sorteos</span>
-                <ArrowRight className="h-4 w-4" />
+                <span>{isAdvancingPhase ? 'Avanzando a Equipos...' : 'Continuar a Equipos'}</span>
+                <ArrowRight className="h-4 w-4 ml-1.5" />
               </PrimaryButton>
             </div>
           </div>
@@ -433,7 +478,7 @@ export function VotingView({
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            {options.map((optionKey) => {
+            {(options.includes('random') ? options : [...options, 'random']).map((optionKey) => {
               const meta = FORMAT_METADATA[optionKey] || {
                 title: optionKey,
                 badge: 'Formato',
@@ -441,15 +486,18 @@ export function VotingView({
                 icon: Trophy,
               };
 
-              const isSelected = selectedChoice === optionKey;
+              const isSelected = selectedChoice?.toLowerCase() === optionKey.toLowerCase();
               const Icon = meta.icon;
 
               return (
                 <button
                   key={optionKey}
                   type="button"
-                  disabled={isSubmitting || countdown.isExpired || isOffline}
-                  onClick={() => handleVote(optionKey)}
+                  disabled={isVoteConfirmed || isSubmitting || countdown.isExpired || isOffline}
+                  onClick={() => {
+                    if (isVoteConfirmed || countdown.isExpired || isSubmitting || isOffline) return;
+                    setSelectedChoice(optionKey);
+                  }}
                   className={`flex flex-col text-left p-4 rounded-md border transition cursor-pointer ${
                     isSelected
                       ? 'border-primary bg-primary/15 glow-green ring-1 ring-primary'
@@ -480,7 +528,7 @@ export function VotingView({
                     {isSelected && (
                       <span className="flex items-center gap-1 rounded bg-primary text-primary-foreground text-[10px] font-bold px-2 py-0.5">
                         <CheckCircle2 className="h-3 w-3" />
-                        Tu Voto
+                        {isVoteConfirmed ? 'Tu Voto Confirmado' : 'Seleccionado'}
                       </span>
                     )}
                   </div>
@@ -502,12 +550,16 @@ export function VotingView({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <button
                   type="button"
-                  onClick={() => setSelectedMatchFormat('SINGLE_MATCH')}
+                  disabled={isVoteConfirmed || isSubmitting || countdown.isExpired || isOffline}
+                  onClick={() => {
+                    if (isVoteConfirmed || countdown.isExpired || isSubmitting || isOffline) return;
+                    setSelectedMatchFormat('SINGLE_MATCH');
+                  }}
                   className={`flex items-center justify-between p-2.5 rounded border text-xs font-semibold transition ${
                     selectedMatchFormat === 'SINGLE_MATCH'
                       ? 'border-primary bg-primary/20 text-primary font-bold glow-green'
                       : 'border-border bg-secondary/50 text-muted-foreground hover:border-border/80'
-                  }`}
+                  } disabled:cursor-not-allowed`}
                 >
                   <div className="flex items-center gap-2">
                     <span className="text-base">⚽</span>
@@ -517,12 +569,16 @@ export function VotingView({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSelectedMatchFormat('TWO_LEGGED')}
+                  disabled={isVoteConfirmed || isSubmitting || countdown.isExpired || isOffline}
+                  onClick={() => {
+                    if (isVoteConfirmed || countdown.isExpired || isSubmitting || isOffline) return;
+                    setSelectedMatchFormat('TWO_LEGGED');
+                  }}
                   className={`flex items-center justify-between p-2.5 rounded border text-xs font-semibold transition ${
                     selectedMatchFormat === 'TWO_LEGGED'
                       ? 'border-accent bg-accent/20 text-accent font-bold glow-orange'
                       : 'border-border bg-secondary/50 text-muted-foreground hover:border-border/80'
-                  }`}
+                  } disabled:cursor-not-allowed`}
                 >
                   <div className="flex items-center gap-2">
                     <span className="text-base">🔄</span>
@@ -533,6 +589,32 @@ export function VotingView({
               </div>
             </div>
           )}
+
+          {/* Explicit Confirm Vote Button (Item 2) */}
+          <div className="pt-4 flex flex-col items-center gap-2 border-t border-border/60 mt-4">
+            {isVoteConfirmed ? (
+              <div className="w-full flex items-center justify-center gap-2.5 rounded-md bg-primary/15 border border-primary/50 py-3 px-6 text-sm font-bold text-primary">
+                <CheckCircle2 className="h-5 w-5 text-primary" />
+                <span>Voto confirmado: esperando al resto de los pibes...</span>
+              </div>
+            ) : (
+              <PrimaryButton
+                type="button"
+                disabled={!selectedChoice || isSubmitting || countdown.isExpired || isOffline}
+                onClick={() => selectedChoice && handleConfirmVote(selectedChoice)}
+                className="w-full sm:w-auto px-10 py-3 text-base font-bold uppercase tracking-wider glow-green"
+              >
+                {isSubmitting ? (
+                  <span>Enviando voto...</span>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    <CheckCircle2 className="h-5 w-5" />
+                    Confirmar Voto
+                  </span>
+                )}
+              </PrimaryButton>
+            )}
+          </div>
         </Panel>
       )}
     </div>

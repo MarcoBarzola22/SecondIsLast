@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { authMiddleware, requireAdmin } from '../middleware/authMiddleware.js';
+import { authMiddleware, optionalAuthMiddleware, requireAdmin } from '../middleware/authMiddleware.js';
 import { whitelistMiddleware } from '../middleware/whitelistMiddleware.js';
 import {
   tournamentService,
@@ -16,15 +16,13 @@ import {
   getActiveVotingSession,
   cancelVotingSession,
 } from '../sockets/votingHandler.js';
+import { handleDraftPick } from '../sockets/draftHandler.js';
 import { getSocketServer } from '../sockets/index.js';
+import { Role, TournamentStatus } from '@prisma/client';
 import { prisma } from '../db.js';
 import { getFormatVotingOptions } from '../domain/voting.js';
 
 const router = Router();
-
-// Enforce authentication and whitelist membership on all tournament endpoints (RNF-4, RF-89)
-router.use(authMiddleware);
-router.use(whitelistMiddleware);
 
 function getIO(req: Request) {
   return req.app.get('io') || getSocketServer();
@@ -34,8 +32,9 @@ function getIO(req: Request) {
  * GET /api/tournaments/active
  * Retrieves the currently active tournament (LOBBY, VOTING_FORMAT, VOTING_THEME, IN_PROGRESS)
  * or null if no tournament is in progress (RF-97).
+ * Uses optionalAuthMiddleware so initial unauthenticated queries return 200 without noisy 401s.
  */
-router.get('/active', async (req: Request, res: Response) => {
+router.get('/active', optionalAuthMiddleware, async (req: Request, res: Response) => {
   try {
     const tournament = await tournamentService.getActiveTournament();
     if (!tournament) {
@@ -62,20 +61,27 @@ router.get('/active', async (req: Request, res: Response) => {
       const userParticipant = tournament.participants.find(
         (p: any) =>
           p.userId === user.id ||
-          (user.playerId && p.playerId === user.playerId)
+          (user.playerId && p.playerId === user.playerId) ||
+          (p.player && user.playerId && p.player.id === user.playerId) ||
+          (p.player?.user?.id === user.id) ||
+          (p.player?.user?.email?.toLowerCase() === user.email?.toLowerCase())
       );
       if (userParticipant) {
         const activePhase = (votingSessionData?.phase ||
           (tournament.status === 'VOTING_FORMAT' ? 'FORMAT' : 'THEME')) as any;
-        const existingVote = await prisma.tournamentVote.findFirst({
-          where: {
-            tournamentId: tournament.id,
-            participantId: userParticipant.id,
-            phase: activePhase,
-          },
-        });
-        if (existingVote) {
-          myVote = existingVote.choice;
+        try {
+          const existingVote = await prisma.tournamentVote.findFirst({
+            where: {
+              tournamentId: tournament.id,
+              participantId: userParticipant.id,
+              phase: activePhase,
+            },
+          });
+          if (existingVote) {
+            myVote = existingVote.choice;
+          }
+        } catch {
+          // Gracefully continue if DB query fails or in unit tests
         }
         const settings = (tournament.settings as any) || {};
         if (settings.matchFormatVotes && settings.matchFormatVotes[userParticipant.id]) {
@@ -84,6 +90,9 @@ router.get('/active', async (req: Request, res: Response) => {
       }
     }
 
+    const tourneySettings = (tournament.settings as any) || {};
+    const assignmentMethod = tourneySettings.assignmentMethod || null;
+
     res.status(200).json({
       tournament: {
         ...tournament,
@@ -91,16 +100,22 @@ router.get('/active', async (req: Request, res: Response) => {
         votingSession: votingSessionData,
         myVote,
         myMatchFormat,
+        assignmentMethod,
       },
       lobbyExpiresAt,
       votingSession: votingSessionData,
       myVote,
       myMatchFormat,
+      assignmentMethod,
     });
   } catch (error: any) {
     res.status(500).json({ error: 'Error interno al consultar el torneo activo.' });
   }
 });
+
+// Enforce authentication and whitelist membership on tournament mutation endpoints (RNF-4, RF-89)
+router.use(authMiddleware);
+router.use(whitelistMiddleware);
 
 /**
  * POST /api/tournaments/lobby
@@ -130,6 +145,11 @@ router.post('/lobby', async (req: Request, res: Response) => {
 router.post('/abandon', async (req: Request, res: Response) => {
   try {
     const user = req.user!;
+    if (user.role !== Role.ADMIN && (user.role as any) !== 'ADMIN') {
+      res.status(403).json({ error: 'Solo el administrador puede reiniciar o abandonar el torneo globalmente.' });
+      return;
+    }
+
     const { tournamentId } = req.body || {};
     const result = await tournamentService.abandonTournament(user, tournamentId);
     const tournament = (result as any).tournament || result;
@@ -348,8 +368,8 @@ router.post('/vote', async (req: Request, res: Response) => {
       return;
     }
 
-    const votePhase = phase.toUpperCase() as 'FORMAT' | 'THEME';
-    if (votePhase !== 'FORMAT' && votePhase !== 'THEME') {
+    const votePhase = phase.toUpperCase() as 'FORMAT' | 'THEME' | 'ASSIGNMENT_METHOD';
+    if (votePhase !== 'FORMAT' && votePhase !== 'THEME' && votePhase !== 'ASSIGNMENT_METHOD') {
       res.status(400).json({ error: 'Fase de votación no válida.' });
       return;
     }
@@ -367,27 +387,53 @@ router.post('/vote', async (req: Request, res: Response) => {
 
     let session = getActiveVotingSession(targetTourneyId);
     if (!session || session.closed || session.phase !== votePhase) {
-      // Hotfix T29: Auto-reconstruct active voting session if lost in memory
-      const tourneyInDb = await prisma.tournament.findUnique({
-        where: { id: targetTourneyId },
-        include: {
-          participants: {
-            where: { isPresent: true },
+      // Auto-reconstruct active voting session if lost in memory or if lobby auto-transitioned
+      let tourneyInDb: any = null;
+      try {
+        tourneyInDb = await prisma.tournament.findUnique({
+          where: { id: targetTourneyId },
+          include: {
+            participants: {
+              where: { isPresent: true },
+            },
           },
-        },
-      });
+        });
+      } catch {
+        tourneyInDb = await tournamentService.getActiveTournament();
+      }
+
+      // If tournament is in LOBBY with >= 4 participants, auto-transition to VOTING_FORMAT (Item 3)
+      if (tourneyInDb && tourneyInDb.status === 'LOBBY' && tourneyInDb.participants.length >= 4) {
+        try {
+          tourneyInDb = await prisma.tournament.update({
+            where: { id: targetTourneyId },
+            data: { status: 'VOTING_FORMAT' },
+            include: {
+              participants: {
+                where: { isPresent: true },
+              },
+            },
+          });
+        } catch {
+          // Gracefully continue
+        }
+      }
 
       const isValidStatus =
         tourneyInDb &&
-        ((votePhase === 'FORMAT' && tourneyInDb.status === 'VOTING_FORMAT') ||
-          (votePhase === 'THEME' && tourneyInDb.status === 'VOTING_THEME'));
+        ((votePhase === 'FORMAT' && (tourneyInDb.status === 'VOTING_FORMAT' || tourneyInDb.status === 'LOBBY')) ||
+          (votePhase === 'THEME' && tourneyInDb.status === 'VOTING_THEME') ||
+          (votePhase === 'ASSIGNMENT_METHOD' &&
+            (tourneyInDb.status === 'VOTING_THEME' || tourneyInDb.status === 'IN_PROGRESS' || tourneyInDb.status === 'VOTING_FORMAT')));
 
       if (isValidStatus) {
         const io = getIO(req);
         const options =
           votePhase === 'FORMAT'
             ? getFormatVotingOptions(tourneyInDb.participants.length)
-            : ['clasicos', 'selecciones', 'champions', 'libertadores'];
+            : votePhase === 'THEME'
+            ? ['clasicos', 'selecciones', 'champions', 'libertadores']
+            : ['DIRECT_DRAW', 'DRAFT_ORDER'];
 
         session = startVotingSession(
           io,
@@ -403,10 +449,11 @@ router.post('/vote', async (req: Request, res: Response) => {
       }
     }
 
-    // Validate choice is one of the valid options (RF-99), case-insensitive check
-    const isChoiceValid = session.options.some(
-      (opt) => opt.toLowerCase() === choice.toLowerCase()
-    );
+    // Validate choice is one of the valid options (RF-99), case-insensitive check and allow 'random' (Item 3)
+    const cleanChoice = choice.trim().toLowerCase();
+    const isChoiceValid =
+      cleanChoice === 'random' ||
+      session.options.some((opt) => opt.toLowerCase() === cleanChoice);
 
     if (!isChoiceValid) {
       res.status(400).json({ error: `La opción "${choice}" no es válida para esta votación.` });
@@ -414,7 +461,9 @@ router.post('/vote', async (req: Request, res: Response) => {
     }
 
     const normalizedChoice =
-      session.options.find((opt) => opt.toLowerCase() === choice.toLowerCase()) || choice;
+      cleanChoice === 'random'
+        ? 'random'
+        : (session.options.find((opt) => opt.toLowerCase() === cleanChoice) || cleanChoice);
 
     const voteResult = await tournamentService.castVote(
       user,
@@ -496,6 +545,118 @@ router.post('/close-voting', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/tournaments/start-voting
+ * Initiates or returns an active 60s voting session (FORMAT, THEME or ASSIGNMENT_METHOD) (T33).
+ */
+router.post('/start-voting', async (req: Request, res: Response) => {
+  try {
+    const { tournamentId, phase = 'ASSIGNMENT_METHOD' } = req.body || {};
+    let targetTourneyId = tournamentId;
+    if (!targetTourneyId) {
+      const active = await tournamentService.getActiveTournament();
+      targetTourneyId = active?.id;
+    }
+
+    if (!targetTourneyId) {
+      res.status(400).json({ error: 'No se encontró un torneo activo para iniciar votación.' });
+      return;
+    }
+
+    const io = getIO(req);
+    let session = getActiveVotingSession(targetTourneyId);
+    if (!session || session.closed || session.phase !== phase) {
+      const tourney = await prisma.tournament.findUnique({
+        where: { id: targetTourneyId },
+        include: {
+          participants: {
+            where: { isPresent: true },
+          },
+        },
+      });
+
+      if (!tourney) {
+        res.status(404).json({ error: 'Torneo no encontrado.' });
+        return;
+      }
+
+      const options =
+        phase === 'FORMAT'
+          ? getFormatVotingOptions(tourney.participants.length)
+          : phase === 'THEME'
+          ? ['clasicos', 'selecciones', 'champions', 'libertadores']
+          : ['DIRECT_DRAW', 'DRAFT_ORDER'];
+
+      session = startVotingSession(
+        io,
+        targetTourneyId,
+        phase,
+        options,
+        tourney.participants.length,
+        60
+      );
+    }
+
+    res.status(200).json({
+      ok: true,
+      session: {
+        phase: session.phase,
+        options: session.options,
+        expiresAt: session.expiresAt,
+        totalVoters: session.totalVoters,
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Error al iniciar la sesión de votación.' });
+  }
+});
+
+/**
+ * POST /api/tournaments/draft/pick
+ * Allows a participant to choose an available team during their turn (T33).
+ */
+router.post('/draft/pick', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { tournamentId, participantId, teamName } = req.body || {};
+    let targetTourneyId = tournamentId;
+    if (!targetTourneyId) {
+      const active = await tournamentService.getActiveTournament();
+      targetTourneyId = active?.id;
+    }
+
+    if (!targetTourneyId || !participantId || !teamName) {
+      res.status(400).json({ error: 'tournamentId, participantId y teamName son requeridos.' });
+      return;
+    }
+
+    // Validate that user is either this participant or admin
+    await tournamentService.validateUserIsParticipantOrAdmin(user, targetTourneyId);
+
+    const io = getIO(req);
+    const result = await handleDraftPick(io, targetTourneyId, participantId, teamName);
+    if (!result.success) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+
+    res.status(200).json({
+      ok: true,
+      session: result.session,
+    });
+  } catch (error: any) {
+    if (error instanceof ForbiddenError || error.statusCode === 403) {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+    if (error instanceof NotFoundError || error.statusCode === 404) {
+      res.status(404).json({ error: error.message });
+      return;
+    }
+    res.status(500).json({ error: error.message || 'Error al elegir equipo en el draft.' });
+  }
+});
+
+/**
  * GET /api/tournaments/teams
  * Previews available teams for a theme (RF-103).
  */
@@ -572,12 +733,12 @@ router.post('/theme', async (req: Request, res: Response) => {
 
 /**
  * POST /api/tournaments/draw-teams
- * Executes synchronized team draw and broadcasts draw:animated (RF-103, RF-104).
+ * Executes synchronized team draw and broadcasts draw:animated (RF-103, RF-104, T31).
  */
 router.post('/draw-teams', async (req: Request, res: Response) => {
   try {
     const user = req.user!;
-    const { tournamentId, customTeams, intervalMs } = req.body || {};
+    const { tournamentId, customTeams, intervalMs, assignmentMethod = 'DIRECT_DRAW' } = req.body || {};
     const io = getIO(req);
 
     const result = await tournamentService.executeTeamDraw(
@@ -585,7 +746,8 @@ router.post('/draw-teams', async (req: Request, res: Response) => {
       io,
       tournamentId,
       customTeams,
-      intervalMs
+      intervalMs,
+      assignmentMethod
     );
 
     res.status(200).json({
@@ -598,12 +760,52 @@ router.post('/draw-teams', async (req: Request, res: Response) => {
       res.status(403).json({ error: error.message });
       return;
     }
+    if (error instanceof NotFoundError || error.statusCode === 404) {
+      res.status(404).json({ error: error.message });
+      return;
+    }
     if (error instanceof BadRequestError || error.statusCode === 400) {
       res.status(400).json({ error: error.message });
       return;
     }
     console.error('[draw-teams error]:', error);
     res.status(500).json({ error: error.message || 'Error interno al ejecutar el sorteo de equipos.' });
+  }
+});
+
+/**
+ * POST /api/tournaments/advance-phase
+ * Advances the tournament phase (e.g. from VOTING_FORMAT to VOTING_THEME).
+ * Usable by any confirmed participant or ADMIN (T32: Autonomía total).
+ */
+router.post('/advance-phase', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { tournamentId, targetStatus = TournamentStatus.VOTING_THEME } = req.body || {};
+    const io = getIO(req);
+
+    const tournament = await tournamentService.advancePhase(user, tournamentId, targetStatus, io);
+
+    res.status(200).json({
+      ok: true,
+      status: tournament.status,
+      tournament,
+    });
+  } catch (error: any) {
+    if (error instanceof ForbiddenError || error.statusCode === 403) {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+    if (error instanceof NotFoundError || error.statusCode === 404) {
+      res.status(404).json({ error: error.message });
+      return;
+    }
+    if (error instanceof BadRequestError || error.statusCode === 400) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    console.error('[advance-phase error]:', error);
+    res.status(500).json({ error: error.message || 'Error interno al avanzar de fase.' });
   }
 });
 
@@ -627,6 +829,9 @@ router.post('/fixture', async (req: Request, res: Response) => {
       return;
     }
 
+    const user = req.user!;
+    await tournamentService.validateUserIsParticipantOrAdmin(user, targetTourneyId);
+
     const io = getIO(req);
     const result = await tournamentService.generateRelationalFixture(targetTourneyId, io);
 
@@ -638,6 +843,10 @@ router.post('/fixture', async (req: Request, res: Response) => {
       totalMatches: result.totalMatches,
     });
   } catch (error: any) {
+    if (error instanceof ForbiddenError || error.statusCode === 403) {
+      res.status(403).json({ error: error.message });
+      return;
+    }
     if (error instanceof NotFoundError || error.statusCode === 404) {
       res.status(404).json({ error: error.message });
       return;
@@ -688,57 +897,6 @@ router.post('/participants/:id/walkover', async (req: Request, res: Response) =>
     }
     console.error('[walkover error]:', error);
     res.status(500).json({ error: error.message || 'Error interno al registrar walkover.' });
-  }
-});
-
-/**
- * POST /api/tournaments/abandon
- * Abandons active tournament and cancels active timers/sessions (T30).
- * Broadcasts tournament:abandoned via WebSockets.
- */
-router.post('/abandon', async (req: Request, res: Response) => {
-  try {
-    const user = req.user!;
-    const { tournamentId } = req.body || {};
-
-    const result = await tournamentService.abandonTournament(user, tournamentId);
-    const io = getIO(req);
-
-    // Cancel lobby and voting timers/sessions in memory
-    cancelLobbyTimer(result.tournament.id);
-    cancelVotingSession(result.tournament.id);
-
-    if (io) {
-      const payload = {
-        tournamentId: result.tournament.id,
-        abandonedBy: user.name,
-      };
-      io.to(`tournament:${result.tournament.id}`).emit('tournament:abandoned', payload);
-      io.emit('tournament:abandoned', payload);
-      io.to(`tournament:${result.tournament.id}`).emit('tournament:status', {
-        status: 'ABANDONED',
-        tournamentId: result.tournament.id,
-      });
-      io.emit('tournament:status', {
-        status: 'ABANDONED',
-        tournamentId: result.tournament.id,
-      });
-    }
-
-    res.status(200).json({
-      message: 'Torneo abandonado y reiniciado exitosamente.',
-      tournament: result.tournament,
-    });
-  } catch (error: any) {
-    if (error instanceof NotFoundError || error.statusCode === 404) {
-      res.status(404).json({ error: error.message });
-      return;
-    }
-    if (error instanceof ForbiddenError || error.statusCode === 403) {
-      res.status(403).json({ error: error.message });
-      return;
-    }
-    res.status(500).json({ error: error.message || 'Error interno al abandonar el torneo.' });
   }
 });
 

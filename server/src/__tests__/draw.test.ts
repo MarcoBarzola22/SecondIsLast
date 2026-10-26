@@ -230,12 +230,52 @@ describe('Teams Preload, Preview and Synchronized Draw (T16 · RF-103, RF-104)',
 
       expect(receivedSteps.length).toBe(4);
       expect(receivedSteps[0]?.step).toBe(1);
+      expect(receivedSteps[0]?.targetPlayerName).toBe('Lionel Messi');
       expect(receivedSteps[3]?.step).toBe(4);
       expect(receivedSteps[3]?.isFinal).toBe(true);
       expect(receivedSteps[3]?.assignments).toBeDefined();
 
       // Verify Prisma participant updates were triggered
       expect(updateParticipantSpy).toHaveBeenCalled();
+    });
+
+    it('returns 403 if requested by an outsider (neither admin nor confirmed participant)', async () => {
+      vi.spyOn(prisma.tournament, 'findFirst').mockResolvedValue(mockTournament as any);
+      const outsider = {
+        id: 'user-outsider',
+        email: 'outsider@secondislast.com',
+        name: 'Outsider Player',
+        role: Role.PLAYER,
+        playerId: 'player-outsider',
+      };
+      const token = createToken(outsider);
+      const res = await request(app)
+        .post('/api/tournaments/draw-teams')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ tournamentId: tourneyId });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('Acceso denegado');
+    });
+
+    it('executes draft order draw animation (1st, 2nd, 3rd pick) without assigning teams', async () => {
+      vi.spyOn(prisma.tournament, 'findFirst').mockResolvedValue(mockTournament as any);
+      vi.spyOn(prisma.tournamentParticipant, 'update').mockResolvedValue({} as any);
+
+      const res = await request(app)
+        .post('/api/tournaments/draw-teams')
+        .set('Authorization', `Bearer ${createToken(adminUser)}`)
+        .send({
+          tournamentId: tourneyId,
+          assignmentMethod: 'DRAFT_ORDER',
+          intervalMs: 10,
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.plan.method).toBe('DRAFT_ORDER');
+      expect(res.body.plan.draftOrder).toHaveLength(4);
+      expect(res.body.plan.steps[0].assignedTeam).toContain('1º en elegir');
+      expect(res.body.plan.steps[0].participantName).toBeDefined();
     });
 
     it('supports draw:sync to provide resolved state upon client reconnection midway or after draw', async () => {

@@ -303,5 +303,66 @@ describe('Relational Fixture Generation & Auto-closed Byes (T17 · RF-113, RNF-2
         expect(m.isBye).toBe(false);
       }
     });
+
+    it('guarantees valid participant UUIDs or null in homeParticipantId / awayParticipantId with zero TBD foreign key crash risk (T31)', async () => {
+      const tourneyId = 'tourney-uuid-check';
+      const participants = [
+        { id: 'part-uuid-1', playerId: 'p1', player: { firstName: 'Juan', lastName: 'Roman' }, isPresent: true },
+        { id: 'part-uuid-2', playerId: 'p2', player: { firstName: 'Martin', lastName: 'Palermo' }, isPresent: true },
+        { id: 'part-uuid-3', playerId: 'p3', player: { firstName: 'Guillermo', lastName: 'Schelotto' }, isPresent: true },
+        { id: 'part-uuid-4', playerId: 'p4', player: { firstName: 'Marcelo', lastName: 'Delgado' }, isPresent: true },
+      ];
+
+      const mockTourney = {
+        id: tourneyId,
+        format: TournamentFormat.BRACKET,
+        matchFormat: MatchFormat.SINGLE_MATCH,
+        status: TournamentStatus.VOTING_THEME,
+        participants,
+      };
+
+      vi.spyOn(prisma.tournament, 'findUnique').mockResolvedValue(mockTourney as any);
+
+      const createdMatchesInTx: any[] = [];
+      vi.spyOn(prisma, '$transaction').mockImplementation(async (callback: any) => {
+        const txMock = {
+          match: {
+            deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+            create: vi.fn().mockImplementation((args: any) => {
+              // Ensure no TBD string is ever passed as homeParticipantId or awayParticipantId
+              expect(args.data.homeParticipantId).not.toBe('TBD');
+              expect(args.data.awayParticipantId).not.toBe('TBD');
+              createdMatchesInTx.push({ id: `match-${createdMatchesInTx.length + 1}`, ...args.data });
+              return Promise.resolve({ id: `match-${createdMatchesInTx.length}`, ...args.data });
+            }),
+            findMany: vi.fn().mockImplementation(() => Promise.resolve(createdMatchesInTx)),
+          },
+          tournament: {
+            update: vi.fn().mockResolvedValue({
+              ...mockTourney,
+              status: TournamentStatus.IN_PROGRESS,
+              currentRound: 1,
+            }),
+          },
+        };
+        return callback(txMock);
+      });
+
+      const res = await request(app)
+        .post('/api/tournaments/fixture')
+        .set('Authorization', `Bearer ${createToken(player1)}`)
+        .send({ tournamentId: tourneyId });
+
+      expect(res.status).toBe(200);
+      const participantIdSet = new Set(participants.map((p) => p.id));
+      for (const m of res.body.matches) {
+        if (m.homeParticipantId) {
+          expect(participantIdSet.has(m.homeParticipantId)).toBe(true);
+        }
+        if (m.awayParticipantId) {
+          expect(participantIdSet.has(m.awayParticipantId)).toBe(true);
+        }
+      }
+    });
   });
 });

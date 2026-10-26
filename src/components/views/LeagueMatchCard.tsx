@@ -12,7 +12,6 @@ import { useAppDispatch, useAppState } from '../../state/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { useNetworkStatus } from '../../hooks/useNetworkStatus';
 import { PrimaryButton, SecondaryButton } from '../ui/Buttons';
-import { HandshakeModal } from './HandshakeModal';
 
 interface LeagueMatchCardProps {
   match: LeagueMatch;
@@ -36,7 +35,6 @@ export function LeagueMatchCard({
   const { user } = useAuth();
   const { isOffline } = useNetworkStatus();
 
-  const [isHandshakeModalOpen, setIsHandshakeModalOpen] = useState(false);
   const [isSubmittingProposal, setIsSubmittingProposal] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
 
@@ -572,7 +570,30 @@ export function LeagueMatchCard({
         <div>
           {isWalkover || isSequentiallyLocked ? null : matchStatus === 'PENDING_CONFIRMATION' && isAway ? (
             <PrimaryButton
-              onClick={() => setIsHandshakeModalOpen(true)}
+              onClick={() => {
+                window.dispatchEvent(
+                  new CustomEvent('open-handshake-modal', {
+                    detail: {
+                      id: match.id,
+                      round: match.round,
+                      homePlayerId: match.playerA,
+                      awayPlayerId: match.playerB,
+                      homePlayerName: nameA,
+                      homeTeamName: teamA,
+                      awayPlayerName: nameB,
+                      awayTeamName: teamB,
+                      homeScore: match.scoreA ?? 0,
+                      awayScore: match.scoreB ?? 0,
+                      homeYellowCards: match.cardsA?.yellow ?? 0,
+                      awayYellowCards: match.cardsB?.yellow ?? 0,
+                      homeRedCards: match.cardsA?.red ?? 0,
+                      awayRedCards: match.cardsB?.red ?? 0,
+                      version: match.version ?? 1,
+                      status: matchStatus,
+                    },
+                  })
+                );
+              }}
               className="py-1 px-3 text-xs bg-primary text-primary-foreground shadow-[0_0_12px_rgba(34,197,94,0.3)]"
             >
               <CheckCircle className="h-3 w-3 mr-1" />
@@ -620,38 +641,6 @@ export function LeagueMatchCard({
         <div className="bg-destructive/15 border-t border-destructive/30 px-3 py-1 text-[11px] text-destructive font-medium">
           {proposalError}
         </div>
-      )}
-
-      {isHandshakeModalOpen && (
-        <HandshakeModal
-          isOpen={isHandshakeModalOpen}
-          onClose={() => setIsHandshakeModalOpen(false)}
-          matchData={{
-            id: match.id,
-            round: match.round,
-            homePlayerId: match.playerA,
-            awayPlayerId: match.playerB,
-            homePlayerName: nameA,
-            homeTeamName: teamA,
-            awayPlayerName: nameB,
-            awayTeamName: teamB,
-            homeScore: match.scoreA ?? 0,
-            awayScore: match.scoreB ?? 0,
-            homeYellowCards: match.cardsA?.yellow ?? 0,
-            awayYellowCards: match.cardsB?.yellow ?? 0,
-            homeRedCards: match.cardsA?.red ?? 0,
-            awayRedCards: match.cardsB?.red ?? 0,
-            version: match.version ?? 1,
-            status: matchStatus,
-          }}
-          onSuccess={() => {
-            dispatch(
-              isGroupMatch
-                ? { type: 'GROUP_MATCH_CONFIRMED', matchId: match.id }
-                : { type: 'LEAGUE_MATCH_CONFIRMED', matchId: match.id }
-            );
-          }}
-        />
       )}
     </div>
   );

@@ -600,6 +600,18 @@ describe('Lobby, Presence & Quorum API and WebSocket Events (T13 · RF-93 to RF-
       expect(res.body.ok).toBe(true);
       expect(res.body.tournament.status).toBe(TournamentStatus.ABANDONED);
     });
+
+    it('returns 403 Forbidden if non-admin attempts to abandon tournament (T32 Anti-trolls)', async () => {
+      const tourneyId = 'tourney-abandon-non-admin';
+      const token = createToken(player1);
+      const res = await request(app)
+        .post('/api/tournaments/abandon')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ tournamentId: tourneyId });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('Solo el administrador');
+    });
   });
 });
 

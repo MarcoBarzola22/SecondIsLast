@@ -422,12 +422,14 @@ describe('Match Submission by Home Player with Penalties & Sequential Lock (T18 
 
       // Validate WebSocket event received by connected peer
       const emittedPayload = await socketEventPromise;
-      expect(emittedPayload).toEqual({
+      expect(emittedPayload).toMatchObject({
         matchId,
         version: 2,
         homeScore: 2,
         awayScore: 2,
         penaltiesWinnerId: 'part-home',
+        awayPlayerId: 'player-away-id',
+        homePlayerId: 'player-local-id',
       });
     });
   });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -11,6 +11,7 @@ import {
   Shuffle,
   Trophy,
   UserCheck,
+  Clock,
 } from 'lucide-react';
 import { generateBracket } from '../../domain/bracket';
 import { generateLeagueFixture } from '../../domain/league';
@@ -26,6 +27,10 @@ import {
 import { formatPlayerName } from '../../domain/players';
 import type { PlayerId } from '../../domain/types';
 import { useAppDispatch, useAppState } from '../../state/AppContext';
+import { useAuth } from '../../context/AuthContext';
+import { useSocket } from '../../context/SocketContext';
+import { useCountdown } from '../../hooks/useCountdown';
+import { DEFAULT_THEME_TEAMS } from '../../domain/teams';
 import { PrimaryButton, SecondaryButton } from '../ui/Buttons';
 import { inputClassName } from '../ui/input';
 import { Panel } from '../ui/Panel';
@@ -45,10 +50,78 @@ export function DraftView({
 }: DraftViewProps) {
   const { activeTournament, players } = useAppState();
   const dispatch = useAppDispatch();
+  const { user } = useAuth();
+  const { socket } = useSocket();
 
   const [draftMode, setDraftMode] = useState<'manual' | 'auto'>('manual');
   const [teamInput, setTeamInput] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  // Synchronized 20s Draft Turn State (T34, T35)
+  const [serverExpiresAt, setServerExpiresAt] = useState<string | null>(null);
+  const [serverCurrentParticipantId, setServerCurrentParticipantId] = useState<string | null>(null);
+  const [serverCurrentParticipantName, setServerCurrentParticipantName] = useState<string | null>(null);
+  const [serverAvailableTeams, setServerAvailableTeams] = useState<string[]>([]);
+  const turnCountdown = useCountdown(serverExpiresAt, 20);
+
+  // Synchronized WebSocket event listeners for live 20s draft (T34, T35)
+  useEffect(() => {
+    if (!socket || !activeTournament?.id) return;
+
+    socket.emit('draft:sync', activeTournament.id, (res: any) => {
+      if (res?.ok && res.session) {
+        setServerExpiresAt(res.session.expiresAt);
+        setServerCurrentParticipantId(res.session.currentParticipantId);
+        if (res.session.currentParticipantName) {
+          setServerCurrentParticipantName(res.session.currentParticipantName);
+        }
+        if (Array.isArray(res.session.availableTeams)) {
+          setServerAvailableTeams(res.session.availableTeams);
+        }
+        if (res.session.chosenTeams) {
+          dispatch({
+            type: 'TEAMS_BATCH_ASSIGNED',
+            teams: res.session.chosenTeams,
+          });
+        }
+      }
+    });
+
+    const handleTurnUpdated = (payload: any) => {
+      setServerExpiresAt(payload.expiresAt);
+      setServerCurrentParticipantId(payload.currentParticipantId);
+      if (payload.currentParticipantName) {
+        setServerCurrentParticipantName(payload.currentParticipantName);
+      }
+      if (Array.isArray(payload.availableTeams)) {
+        setServerAvailableTeams(payload.availableTeams);
+      }
+      if (payload.chosenTeams) {
+        dispatch({
+          type: 'TEAMS_BATCH_ASSIGNED',
+          teams: payload.chosenTeams,
+        });
+      }
+    };
+
+    const handleDraftCompleted = (payload: any) => {
+      if (payload.chosenTeams) {
+        dispatch({
+          type: 'TEAMS_BATCH_ASSIGNED',
+          teams: payload.chosenTeams,
+        });
+      }
+      setServerExpiresAt(null);
+    };
+
+    socket.on('draft:turn_updated', handleTurnUpdated);
+    socket.on('draft:completed', handleDraftCompleted);
+
+    return () => {
+      socket.off('draft:turn_updated', handleTurnUpdated);
+      socket.off('draft:completed', handleDraftCompleted);
+    };
+  }, [socket, activeTournament?.id, dispatch]);
 
   // Sorteo Automático state (RF-52)
   const [autoTeams, setAutoTeams] = useState<string[]>(() => {
@@ -88,7 +161,77 @@ export function DraftView({
   const playersMap = new Map(players.map((p) => [p.id, p]));
 
   const currentDrafterId = getCurrentDrafter(draftOrder, teams);
+  const effectiveCurrentDrafterId = serverCurrentParticipantId || currentDrafterId;
   const complete = isDraftComplete(participantIds, teams);
+
+  // Set of already chosen teams (normalized for filtering - T33)
+  const chosenTeamsSet = useMemo(() => {
+    const set = new Set<string>();
+    Object.values(teams).forEach((t) => {
+      if (typeof t === 'string' && t.trim().length > 0) {
+        set.add(t.trim().toLowerCase());
+      }
+    });
+    return set;
+  }, [teams]);
+
+  // Available teams from server or default theme teams, excluding already chosen teams (T33)
+  const availableTeamsList = useMemo(() => {
+    const baseList =
+      serverAvailableTeams.length > 0
+        ? serverAvailableTeams
+        : (DEFAULT_THEME_TEAMS[theme || 'Apertura 2006'] || DEFAULT_THEME_TEAMS['Apertura 2006']);
+
+    const unique = Array.from(new Set(baseList));
+    return unique.filter((t) => !chosenTeamsSet.has(t.trim().toLowerCase()));
+  }, [serverAvailableTeams, theme, chosenTeamsSet]);
+
+  // All theme teams (available + chosen) for full grid display with locks (T35)
+  const allThemeTeams = useMemo(() => {
+    const baseList =
+      serverAvailableTeams.length > 0
+        ? serverAvailableTeams
+        : (DEFAULT_THEME_TEAMS[theme || 'Apertura 2006'] || DEFAULT_THEME_TEAMS['Apertura 2006']);
+    const chosenList = Object.values(teams).filter(Boolean);
+    return Array.from(new Set([...baseList, ...chosenList]));
+  }, [serverAvailableTeams, theme, teams]);
+
+  // Display name of current participant whose turn it is (T35)
+  const currentDrafterDisplayName = useMemo(() => {
+    if (serverCurrentParticipantName) return serverCurrentParticipantName;
+    if (effectiveCurrentDrafterId && playersMap.has(effectiveCurrentDrafterId)) {
+      return formatPlayerName(playersMap.get(effectiveCurrentDrafterId)!);
+    }
+    return 'Participante';
+  }, [serverCurrentParticipantName, effectiveCurrentDrafterId, playersMap]);
+
+  // Determines whether the current authenticated user has the turn (T35)
+  const isUserTurn = useMemo(() => {
+    if (!serverCurrentParticipantId) return true; // offline/dev mode without socket server
+    if (!user) return false;
+
+    const userPlayerId = user.playerId || user.player?.id;
+    const userId = user.id;
+    const drafterName = currentDrafterDisplayName.trim().toLowerCase();
+    const userName = (user.name || '').trim().toLowerCase();
+
+    if (userPlayerId && (effectiveCurrentDrafterId === userPlayerId || serverCurrentParticipantId === userPlayerId)) {
+      return true;
+    }
+    if (userId && (effectiveCurrentDrafterId === userId || serverCurrentParticipantId === userId)) {
+      return true;
+    }
+    if (user.player) {
+      const full = `${user.player.firstName} ${user.player.lastName}`.trim().toLowerCase();
+      if (full && drafterName && (drafterName.includes(full) || full.includes(drafterName))) {
+        return true;
+      }
+    }
+    if (userName && drafterName && (drafterName.includes(userName) || userName.includes(drafterName))) {
+      return true;
+    }
+    return false;
+  }, [user, effectiveCurrentDrafterId, serverCurrentParticipantId, currentDrafterDisplayName]);
 
   const orderForReveal =
     draftOrder.length === participantIds.length ? draftOrder : participantIds;
@@ -224,27 +367,70 @@ export function DraftView({
     }
   };
 
-  const handleConfirmTeam = (e: FormEvent, playerId: PlayerId) => {
-    e.preventDefault();
+  const handleConfirmTeam = async (e?: FormEvent, playerId?: PlayerId, customPick?: string) => {
+    if (e) e.preventDefault();
     setError(null);
 
-    const validation = validateTeamName(teamInput, teams, playerId);
+    if (!isUserTurn) {
+      setError('Solo el participante que tiene el turno puede elegir su equipo.');
+      return;
+    }
+
+    const targetPlayerId = playerId || effectiveCurrentDrafterId;
+    if (!targetPlayerId) return;
+
+    const rawChoice = customPick ?? teamInput;
+    const validation = validateTeamName(rawChoice, teams, targetPlayerId);
     if (!validation.isValid) {
       setError(validation.errorMessage);
       return;
     }
 
+    const sanitizedChoice = validation.sanitizedTeamName;
+
+    // Dispatch locally in frontend state
     dispatch({
       type: 'TEAM_ASSIGNED',
-      playerId,
-      team: validation.sanitizedTeamName,
+      playerId: targetPlayerId,
+      team: sanitizedChoice,
     });
 
     setTeamInput('');
+
+    // Synchronize via WebSockets and REST fallback (T33)
+    if (activeTournament.id) {
+      if (socket) {
+        socket.emit('draft:pick', {
+          tournamentId: activeTournament.id,
+          participantId: targetPlayerId,
+          teamName: sanitizedChoice,
+        });
+      }
+
+      fetch('/api/tournaments/draft/pick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tournamentId: activeTournament.id,
+          participantId: targetPlayerId,
+          teamName: sanitizedChoice,
+        }),
+        credentials: 'include',
+      }).catch((err) => console.warn('[DraftView] Error syncing draft pick:', err));
+    }
   };
 
   const handleProceedToCompetition = () => {
     if (!complete) return;
+
+    if (activeTournament.id) {
+      fetch('/api/tournaments/fixture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tournamentId: activeTournament.id }),
+        credentials: 'include',
+      }).catch((err) => console.warn('[DraftView] Error triggering cloud fixture:', err));
+    }
 
     if (
       activeTournament.tournamentType === 'league' ||
@@ -338,15 +524,151 @@ export function DraftView({
 
         {draftMode === 'manual' ? (
           <>
-            <p className="mb-6 text-sm text-muted-foreground">
+            <p className="mb-4 text-sm text-muted-foreground">
               Cada participante elige su equipo o personaje según el orden sorteado. No se pueden repetir equipos.
             </p>
+
+            {/* Banner Gigante de Turno y Tiempo Restante (T35) */}
+            {!complete && effectiveCurrentDrafterId && (
+              <div
+                className={`mb-6 rounded-2xl border-4 p-6 sm:p-8 text-center shadow-2xl transition-all ${
+                  turnCountdown.secondsLeft <= 5 && !turnCountdown.isExpired
+                    ? 'border-destructive bg-destructive/15 animate-pulse glow-red'
+                    : 'border-primary/80 bg-gradient-to-r from-primary/15 via-background/95 to-primary/15 glow-blue'
+                }`}
+              >
+                <div className="flex items-center justify-center gap-2 mb-2">
+                  <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/20 border border-primary/40 text-primary text-xs font-bold uppercase tracking-widest">
+                    <Clock className="h-4 w-4" /> Draft Oficial de Equipos (20s)
+                  </span>
+                </div>
+                <h1 className="text-2xl sm:text-3xl font-black font-display uppercase tracking-wide text-foreground">
+                  TURNO DE: <span className="text-primary text-glow">{currentDrafterDisplayName}</span>
+                  {isUserTurn && (
+                    <span className="ml-3 inline-block rounded-full bg-primary/25 border-2 border-primary px-3 py-0.5 text-xs font-bold text-primary animate-pulse">
+                      ¡ES TU TURNO!
+                    </span>
+                  )}
+                </h1>
+                <div className="mt-3 py-3 px-8 inline-block rounded-2xl bg-background/90 border-2 border-primary/50 shadow-inner">
+                  <span className="font-mono text-4xl sm:text-5xl font-black text-primary tracking-wider">
+                    TIEMPO RESTANTE:{' '}
+                    <span
+                      className={
+                        turnCountdown.secondsLeft <= 5
+                          ? 'text-destructive font-black animate-pulse'
+                          : 'text-primary'
+                      }
+                    >
+                      {turnCountdown.formattedTime}
+                    </span>
+                  </span>
+                </div>
+                <div className="mt-4 max-w-md mx-auto h-2.5 w-full bg-background/80 rounded-full overflow-hidden border border-border/50">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      turnCountdown.secondsLeft <= 5 ? 'bg-destructive' : 'bg-primary'
+                    }`}
+                    style={{ width: `${turnCountdown.progressPercentage}%` }}
+                  />
+                </div>
+                {!isUserTurn && (
+                  <p className="text-xs text-muted-foreground mt-3 font-medium">
+                    🔒 Es el turno de <strong>{currentDrafterDisplayName}</strong>. La cuadrícula de equipos se desbloqueará cuando te toque elegir.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Cuadrícula de Equipos de la Temática con Candados (T35) */}
+            <div className="mb-6 rounded-xl border-2 border-border/80 bg-background/60 p-5 shadow-lg">
+              <div className="flex items-center justify-between mb-3 border-b border-border/40 pb-2">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-primary" />
+                  <span className="font-display font-bold text-sm uppercase tracking-wider text-foreground">
+                    Cuadrícula de Equipos ({theme || 'Temática'})
+                  </span>
+                </div>
+                <span className="text-xs font-mono text-muted-foreground">
+                  {availableTeamsList.length} disponibles de {allThemeTeams.length} total
+                </span>
+              </div>
+
+              {allThemeTeams.length > 0 ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 max-h-64 overflow-y-auto pr-1">
+                  {allThemeTeams.map((teamName) => {
+                    const isChosen = chosenTeamsSet.has(teamName.trim().toLowerCase());
+                    const chosenByPlayerId = Object.keys(teams).find(
+                      (k) => (teams[k] || '').trim().toLowerCase() === teamName.trim().toLowerCase()
+                    );
+                    const chosenByPlayer = chosenByPlayerId ? playersMap.get(chosenByPlayerId) : null;
+
+                    if (isChosen) {
+                      return (
+                        <div
+                          key={teamName}
+                          className="flex flex-col items-center justify-center p-3 rounded-lg border border-border/40 bg-secondary/20 opacity-40 cursor-not-allowed text-center select-none"
+                          title={`Ya elegido por ${chosenByPlayer ? formatPlayerName(chosenByPlayer) : 'otro participante'}`}
+                        >
+                          <span className="line-through text-xs font-semibold text-muted-foreground truncate w-full">
+                            {teamName}
+                          </span>
+                          <span className="text-[10px] font-mono text-muted-foreground flex items-center gap-1 mt-1">
+                            🔒 {chosenByPlayer ? formatPlayerName(chosenByPlayer) : 'Elegido'}
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    if (!isUserTurn) {
+                      return (
+                        <div
+                          key={teamName}
+                          className="flex flex-col items-center justify-center p-3 rounded-lg border border-border/50 bg-secondary/30 opacity-60 cursor-not-allowed text-center select-none"
+                          title="Esperá tu turno para poder elegir"
+                        >
+                          <span className="text-xs font-semibold text-foreground truncate w-full">
+                            {teamName}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground mt-1">
+                            🔒 Turno de otro
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <button
+                        key={teamName}
+                        type="button"
+                        onClick={() => {
+                          handleConfirmTeam(undefined, effectiveCurrentDrafterId!, teamName);
+                        }}
+                        className="flex flex-col items-center justify-center p-3 rounded-lg border-2 border-primary/50 bg-primary/10 hover:border-primary hover:bg-primary/25 hover:scale-[1.02] text-foreground font-bold text-xs transition cursor-pointer shadow-sm text-center"
+                        title={`Hacé clic para elegir ${teamName}`}
+                      >
+                        <span className="truncate w-full">{teamName}</span>
+                        <span className="text-[10px] text-primary font-bold mt-1">
+                          Elegir →
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground italic">
+                  {complete
+                    ? '¡Todos los equipos fueron seleccionados!'
+                    : 'No quedan más equipos disponibles en la temática.'}
+                </p>
+              )}
+            </div>
 
             <ol className="space-y-3">
               {draftOrder.map((playerId, index) => {
                 const player = playersMap.get(playerId);
                 const assignedTeam = teams[playerId];
-                const isCurrentTurn = currentDrafterId === playerId;
+                const isCurrentTurn = effectiveCurrentDrafterId === playerId;
                 const hasChosen = Boolean(
                   assignedTeam && assignedTeam.trim().length > 0
                 );
@@ -395,25 +717,31 @@ export function DraftView({
                           </span>
                         </div>
                       ) : isCurrentTurn ? (
-                        <form
-                          onSubmit={(e) => handleConfirmTeam(e, playerId)}
-                          className="flex flex-col gap-2 sm:flex-row"
-                        >
-                          <input
-                            type="text"
-                            autoFocus
-                            placeholder="Escribí el equipo (ej. Boca, Milan)..."
-                            value={teamInput}
-                            onChange={(e) => {
-                              setTeamInput(e.target.value);
-                              if (error) setError(null);
-                            }}
-                            className={`flex-1 text-base ${inputClassName}`}
-                          />
-                          <SecondaryButton type="submit">
-                            Elegir <ChevronRight className="h-3.5 w-3.5" />
-                          </SecondaryButton>
-                        </form>
+                        isUserTurn ? (
+                          <form
+                            onSubmit={(e) => handleConfirmTeam(e, playerId)}
+                            className="flex flex-col gap-2 sm:flex-row"
+                          >
+                            <input
+                              type="text"
+                              autoFocus
+                              placeholder="Escribí el equipo o hacé clic arriba..."
+                              value={teamInput}
+                              onChange={(e) => {
+                                setTeamInput(e.target.value);
+                                if (error) setError(null);
+                              }}
+                              className={`flex-1 text-base ${inputClassName}`}
+                            />
+                            <SecondaryButton type="submit">
+                              Elegir <ChevronRight className="h-3.5 w-3.5" />
+                            </SecondaryButton>
+                          </form>
+                        ) : (
+                          <div className="flex items-center gap-2 rounded-sm border border-border/60 bg-secondary/30 px-3 py-2 text-xs text-muted-foreground italic">
+                            <span>🔒 Esperando que {currentDrafterDisplayName} elija su equipo (tiempo restante: {turnCountdown.formattedTime})</span>
+                          </div>
+                        )
                       ) : (
                         <span className="text-xs uppercase tracking-wider text-muted-foreground/80">
                           Esperando turno...

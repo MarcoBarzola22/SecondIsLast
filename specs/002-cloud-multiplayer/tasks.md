@@ -161,3 +161,9 @@
   Ejecutar suite completa de tests de dominio (`npm test`) y tests de integración backend (`npm run server:test`). Auditoría de responsive en celular y desktop, y validación de textos en español rioplatense.  
   - Cubre: Criterios de Finalización (spec §8), RF-119, Principio 4, Principio 6.  
   - Hecho cuando: 100% de los tests pasan en verde, build de frontend y backend sin advertencias, y flujo de prueba simulando 4 clientes concurrentes completa un torneo de punta a punta.
+
+- [x] **T28 · Hotfix Integral: Sincronización Multi-usuario, Cronómetros y Resiliencia en Vivo**  
+  Solución de carrera en `SocketContext` para unión a salas, temporizador de 120s en Lobby al llegar a quórum de 4 con transición automática a votación, persistencia de `cloudTournament` y sincronización garantizada de cronómetro en `VotingView`, soporte de formato al azar (`random`) y modalidad de cruces (`SINGLE_MATCH` vs `TWO_LEGGED`), y blindaje del proceso Node.js ante caídas por `ECONNRESET`.  
+  - Cubre: RF-96, RF-97, RF-99, RF-100, RF-105, RF-119, RNF-1.  
+  - Hecho cuando: 4 o más clientes conectados en simultáneo transicionan juntos de Lobby a Votación de Formato, el cronómetro de 120s se ve en vivo en todos los navegadores, y el servidor no colapsa ante reconexiones.
+

@@ -435,10 +435,10 @@ describe('Live Voting API, Timer, Early Closure and Sockets (T15 · RF-99, RF-10
       expect(res.body.result.winner).toBe('league');
       expect(res.body.result.wasDraw).toBe(false);
 
-      // Verify Prisma tournament update with winning format
+      // Verify Prisma tournament update with winning format and matchFormat
       expect(updateSpy).toHaveBeenCalledWith({
         where: { id: tourneyId },
-        data: { format: TournamentFormat.LEAGUE },
+        data: expect.objectContaining({ format: TournamentFormat.LEAGUE }),
       });
 
       const socketPayload = await endedPromise;
@@ -522,7 +522,7 @@ describe('Live Voting API, Timer, Early Closure and Sockets (T15 · RF-99, RF-10
 
       expect(updateSpy).toHaveBeenCalledWith({
         where: { id: tourneyId },
-        data: { format: TournamentFormat.DOUBLE_ELIMINATION },
+        data: expect.objectContaining({ format: TournamentFormat.DOUBLE_ELIMINATION }),
       });
 
       const socketData = await endedPromise;

@@ -202,3 +202,35 @@ export function shouldCloseVoting(
   const allVoted = hasAllParticipantsVoted(votedCount, totalConfirmed);
   return timeExpired || allVoted;
 }
+
+export const RANDOM_FORMAT_OPTION = 'random';
+export type MatchFormatOption = 'SINGLE_MATCH' | 'TWO_LEGGED';
+export const MATCH_FORMAT_OPTIONS: readonly MatchFormatOption[] = [
+  'SINGLE_MATCH',
+  'TWO_LEGGED',
+] as const;
+
+/**
+ * Returns available voting options for tournament format, including the explicit RANDOM option.
+ */
+export function getFormatVotingOptions(n: number): string[] {
+  return [...getValidFormatsForParticipants(n), RANDOM_FORMAT_OPTION];
+}
+
+/**
+ * Resolves the final format winner. If "random" was elect, draws uniformly among valid formats for N.
+ */
+export function resolveFormatWinner(
+  winner: string,
+  validFormats: readonly TournamentType[],
+  rng: RngFn = Math.random
+): TournamentType {
+  if (winner.toLowerCase() === RANDOM_FORMAT_OPTION) {
+    const formatsWithoutRandom = validFormats.filter(
+      (f) => (f as string).toLowerCase() !== RANDOM_FORMAT_OPTION
+    );
+    const randIdx = Math.floor(rng() * formatsWithoutRandom.length);
+    return formatsWithoutRandom[randIdx] || 'bracket';
+  }
+  return winner as TournamentType;
+}

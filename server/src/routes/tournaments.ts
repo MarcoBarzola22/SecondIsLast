@@ -8,7 +8,7 @@ import {
   BadRequestError,
   ForbiddenError,
 } from '../services/tournamentService.js';
-import { broadcastLobbyUpdated } from '../sockets/lobbyHandler.js';
+import { broadcastLobbyUpdated, cancelLobbyTimer, getActiveLobbySession } from '../sockets/lobbyHandler.js';
 import {
   startVotingSession,
   broadcastVoteUpdated,
@@ -35,7 +35,32 @@ function getIO(req: Request) {
 router.get('/active', async (_req: Request, res: Response) => {
   try {
     const tournament = await tournamentService.getActiveTournament();
-    res.status(200).json({ tournament });
+    if (!tournament) {
+      res.status(200).json({ tournament: null });
+      return;
+    }
+    const lobbySession = getActiveLobbySession(tournament.id);
+    const lobbyExpiresAt = lobbySession?.expiresAt || null;
+    const votingSession = getActiveVotingSession(tournament.id);
+    const votingSessionData =
+      votingSession && !votingSession.closed
+        ? {
+            phase: votingSession.phase,
+            options: votingSession.options,
+            expiresAt: votingSession.expiresAt,
+            totalVoters: votingSession.totalVoters,
+          }
+        : null;
+
+    res.status(200).json({
+      tournament: {
+        ...tournament,
+        lobbyExpiresAt,
+        votingSession: votingSessionData,
+      },
+      lobbyExpiresAt,
+      votingSession: votingSessionData,
+    });
   } catch (error: any) {
     res.status(500).json({ error: 'Error interno al consultar el torneo activo.' });
   }
@@ -173,6 +198,8 @@ router.post('/start-voting', async (req: Request, res: Response) => {
     const result = await tournamentService.startFormatVoting(user, tournamentId);
     const io = getIO(req);
 
+    cancelLobbyTimer(result.tournament.id);
+
     // Start 120s countdown session and broadcast vote:started
     const session = startVotingSession(
       io,
@@ -182,6 +209,13 @@ router.post('/start-voting', async (req: Request, res: Response) => {
       result.totalVoters,
       120
     );
+
+    if (io) {
+      io.to(`tournament:${result.tournament.id}`).emit('tournament:status', {
+        status: 'VOTING_FORMAT',
+        tournamentId: result.tournament.id,
+      });
+    }
 
     res.status(200).json({
       tournament: result.tournament,
@@ -211,7 +245,7 @@ router.post('/start-voting', async (req: Request, res: Response) => {
 router.post('/vote', async (req: Request, res: Response) => {
   try {
     const user = req.user!;
-    const { phase, choice, tournamentId } = req.body || {};
+    const { phase, choice, matchFormat, tournamentId } = req.body || {};
 
     if (!phase || !choice || typeof choice !== 'string') {
       res.status(400).json({ error: 'Fase y opción elegida son obligatorias.' });
@@ -254,6 +288,7 @@ router.post('/vote', async (req: Request, res: Response) => {
       user,
       votePhase,
       normalizedChoice,
+      matchFormat,
       targetTourneyId
     );
 

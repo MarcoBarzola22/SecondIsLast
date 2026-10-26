@@ -78,11 +78,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       activeRoomRef.current = tournamentId;
       setCurrentRoom(tournamentId);
 
-      if (socket && isConnected) {
+      if (socket) {
         socket.emit('tournament:join', tournamentId);
       }
     },
-    [socket, isConnected]
+    [socket]
   );
 
   const leaveTournament = useCallback(
@@ -93,11 +93,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         setCurrentRoom(null);
       }
 
-      if (socket && isConnected) {
+      if (socket) {
         socket.emit('tournament:leave', tournamentId);
       }
     },
-    [socket, isConnected]
+    [socket]
   );
 
   const value: SocketContextType = {

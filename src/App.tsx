@@ -28,6 +28,29 @@ export default function App() {
   const { isOnline } = useNetworkStatus();
   const [liveHandshakeMatch, setLiveHandshakeMatch] = useState<HandshakeMatchData | null>(null);
 
+  // Derive initial active view from persistent tournament phase (RF-40)
+  const [view, setView] = useState<ViewType>(() => {
+    if (activeTournament) {
+      if (activeTournament.phase === 'theme') return 'tematica';
+      if (activeTournament.phase === 'draft') return 'draft';
+      if (activeTournament.phase === 'bracket') return 'bracket';
+      if (activeTournament.phase === 'league') return 'league';
+      if (activeTournament.phase === 'group_stage') return 'group_stage';
+      if (activeTournament.phase === 'group_playoffs') return 'bracket';
+      if (activeTournament.phase === 'double_elimination') return 'double_elimination';
+    }
+    return 'registro';
+  });
+
+  const [activeTournamentId, setActiveTournamentId] = useState<string | undefined>(activeTournament?.id);
+  const [cloudTournament, setCloudTournament] = useState<any>(null);
+  const [votingSessionData, setVotingSessionData] = useState<{
+    expiresAt: string | null;
+    options: string[];
+    phase: 'FORMAT' | 'THEME';
+    totalVoters: number;
+  } | null>(null);
+
   // Cache active tournament on state changes (RF-120)
   useEffect(() => {
     if (activeTournament) {
@@ -35,7 +58,7 @@ export default function App() {
     }
   }, [activeTournament]);
 
-  // Automatic Rehydration from /api/tournaments/active upon reconnection (RF-120, RNF-3)
+  // Automatic Rehydration from /api/tournaments/active upon reconnection & status sync (RF-120, RNF-3)
   const rehydrateActiveTournament = useCallback(async () => {
     try {
       const res = await fetch('/api/tournaments/active', {
@@ -45,9 +68,45 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         if (data.tournament) {
+          setCloudTournament(data.tournament);
           saveOfflineTournament(data.tournament);
+          setActiveTournamentId(data.tournament.id);
           if (socket) {
             socket.emit('tournament:join', data.tournament.id);
+          }
+
+          // Auto-synchronize view according to tournament.status across all clients (T28)
+          const status = data.tournament.status;
+          if (status === 'LOBBY') {
+            setView((curr) => (curr === 'registro' ? 'lobby' : curr));
+          } else if (status === 'VOTING_FORMAT' || status === 'VOTING_THEME') {
+            setView('votacion');
+            const vs = data.tournament.votingSession || data.votingSession;
+            if (vs) {
+              setVotingSessionData({
+                expiresAt: vs.expiresAt,
+                options: vs.options,
+                phase: vs.phase,
+                totalVoters: vs.totalVoters,
+              });
+            } else if (socket) {
+              socket.emit('vote:sync', data.tournament.id, (resVote: any) => {
+                if (resVote?.ok && resVote.session) {
+                  setVotingSessionData({
+                    expiresAt: resVote.session.expiresAt,
+                    options: resVote.session.options,
+                    phase: resVote.session.phase,
+                    totalVoters: resVote.session.totalVoters,
+                  });
+                }
+              });
+            }
+          } else if (status === 'IN_PROGRESS') {
+            const format = (data.tournament.format || '').toLowerCase();
+            if (format === 'bracket') setView('bracket');
+            else if (format === 'league' || format === 'league_playoffs') setView('league');
+            else if (format === 'group_stage') setView('group_stage');
+            else if (format === 'double_elimination') setView('double_elimination');
           }
         }
       }
@@ -56,11 +115,78 @@ export default function App() {
     }
   }, [socket]);
 
+  // Only invoke rehydrate when user is authenticated (silences initial 401s)
   useEffect(() => {
-    if (isOnline) {
+    if (isOnline && user) {
       rehydrateActiveTournament();
     }
-  }, [isOnline, rehydrateActiveTournament]);
+  }, [isOnline, user, rehydrateActiveTournament]);
+
+  // Global socket listeners for automatic phase & view transitions (T28)
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleTournamentStatus = async (payload: any) => {
+      if (payload?.status === 'VOTING_FORMAT' || payload?.status === 'VOTING_THEME') {
+        setView('votacion');
+      }
+      if (isOnline && user) {
+        await rehydrateActiveTournament();
+      }
+    };
+
+    const handleVoteStarted = (payload: any) => {
+      setVotingSessionData({
+        expiresAt: payload.expiresAt,
+        options: payload.options,
+        phase: payload.phase,
+        totalVoters: payload.totalVoters,
+      });
+      setView('votacion');
+    };
+
+    const handleVoteEnded = async () => {
+      setView('equipos');
+      if (isOnline && user) {
+        await rehydrateActiveTournament();
+      }
+    };
+
+    const handleFixtureReady = async (payload: any) => {
+      const format = (
+        payload?.tournament?.format ||
+        payload?.format ||
+        cloudTournament?.format ||
+        ''
+      ).toLowerCase();
+
+      if (format === 'league' || format === 'league_playoffs') {
+        setView('league');
+      } else if (format === 'group_stage') {
+        setView('group_stage');
+      } else if (format === 'double_elimination') {
+        setView('double_elimination');
+      } else {
+        setView('bracket');
+      }
+
+      if (isOnline && user) {
+        await rehydrateActiveTournament();
+      }
+    };
+
+    socket.on('tournament:status', handleTournamentStatus);
+    socket.on('vote:started', handleVoteStarted);
+    socket.on('vote:ended', handleVoteEnded);
+    socket.on('fixture:ready', handleFixtureReady);
+
+    return () => {
+      socket.off('tournament:status', handleTournamentStatus);
+      socket.off('vote:started', handleVoteStarted);
+      socket.off('vote:ended', handleVoteEnded);
+      socket.off('fixture:ready', handleFixtureReady);
+    };
+  }, [socket, isOnline, user, cloudTournament?.format, rehydrateActiveTournament]);
 
   // Live WebSocket Handshake Notification & Sequential Unlock (RF-105, RF-108, RF-114, RF-115, RF-119)
   useEffect(() => {
@@ -174,20 +300,6 @@ export default function App() {
     };
   }, [socket, user?.playerId, user?.name, user?.player, dispatch]);
 
-  // Derive initial active view from persistent tournament phase (RF-40)
-  const [view, setView] = useState<ViewType>(() => {
-    if (activeTournament) {
-      if (activeTournament.phase === 'theme') return 'tematica';
-      if (activeTournament.phase === 'draft') return 'draft';
-      if (activeTournament.phase === 'bracket') return 'bracket';
-      if (activeTournament.phase === 'league') return 'league';
-      if (activeTournament.phase === 'group_stage') return 'group_stage';
-      if (activeTournament.phase === 'group_playoffs') return 'bracket';
-      if (activeTournament.phase === 'double_elimination') return 'double_elimination';
-    }
-    return 'registro';
-  });
-
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 md:px-8">
       <Header currentView={view} onNavigate={setView} />
@@ -198,7 +310,13 @@ export default function App() {
         )}
 
         {view === 'votacion' && (
-          <VotingView onProceedNext={() => setView('equipos')} />
+          <VotingView
+            tournamentId={cloudTournament?.id || activeTournamentId || activeTournament?.id}
+            initialExpiresAt={votingSessionData?.expiresAt}
+            initialOptions={votingSessionData?.options}
+            initialTotalVoters={votingSessionData?.totalVoters}
+            onProceedNext={() => setView('equipos')}
+          />
         )}
 
         {view === 'equipos' && (

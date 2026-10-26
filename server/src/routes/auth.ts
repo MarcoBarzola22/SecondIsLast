@@ -85,6 +85,54 @@ router.post('/logout', (_req: Request, res: Response) => {
   res.status(200).json({ message: 'Sesión cerrada exitosamente.' });
 });
 
+// GET /api/auth/dev-login - Development login via query param (?email=...)
+router.get('/dev-login', async (req: Request, res: Response) => {
+  if (config.nodeEnv !== 'development' && config.nodeEnv !== 'test') {
+    res.status(404).json({ error: 'Ruta de desarrollo no disponible en producción.' });
+    return;
+  }
+
+  const email = (req.query.email as string) || '';
+  const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  if (!email || !EMAIL_REGEX.test(email.trim())) {
+    res.status(400).json({ error: 'El correo electrónico proporcionado no es válido.' });
+    return;
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
+  try {
+    const namePrefix = normalizedEmail.split('@')[0];
+    const derivedName = namePrefix.charAt(0).toUpperCase() + namePrefix.slice(1);
+
+    const { user, token } = await userService.authenticateWithWhitelist({
+      email: normalizedEmail,
+      name: `Jugador ${derivedName}`,
+      googleId: `dev-login-${normalizedEmail}`,
+    });
+
+    res.cookie('token', token, COOKIE_OPTIONS);
+
+    if (req.headers.accept?.includes('application/json')) {
+      res.status(200).json({ user, token });
+      return;
+    }
+
+    res.redirect(config.frontendUrl);
+  } catch (error: any) {
+    if (error.message?.includes('No estás en la lista blanca')) {
+      if (req.headers.accept?.includes('application/json')) {
+        res.status(403).json({ error: error.message });
+        return;
+      }
+      res.redirect(`${config.frontendUrl}?error=${encodeURIComponent(error.message)}`);
+      return;
+    }
+    res.status(500).json({ error: 'Error interno en inicio de sesión de desarrollo.' });
+  }
+});
+
 // POST /api/auth/dev-login - Development & testing multi-user login (RF-89 enforced)
 router.post('/dev-login', async (req: Request, res: Response) => {
   if (config.nodeEnv !== 'development' && config.nodeEnv !== 'test') {

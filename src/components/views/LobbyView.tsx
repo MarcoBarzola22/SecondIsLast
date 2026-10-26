@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
+import { useCountdown } from '../../hooks/useCountdown';
 import { PrimaryButton, SecondaryButton } from '../ui/Buttons';
 import { Panel } from '../ui/Panel';
 import { inputClassName } from '../ui/input';
@@ -61,6 +62,9 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
   const [actionLoading, setActionLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [newLobbyName, setNewLobbyName] = useState<string>('');
+  const [lobbyExpiresAt, setLobbyExpiresAt] = useState<string | null>(null);
+
+  const countdown = useCountdown(lobbyExpiresAt, 120);
 
   // Fetch active tournament status from server
   const fetchActiveTournament = useCallback(async () => {
@@ -87,12 +91,18 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
         setParticipants(parts);
         setCount(parts.length);
         setCanStart(parts.length >= 4);
+        if (data.tournament.lobbyExpiresAt || data.lobbyExpiresAt) {
+          setLobbyExpiresAt(data.tournament.lobbyExpiresAt || data.lobbyExpiresAt);
+        } else if (parts.length < 4) {
+          setLobbyExpiresAt(null);
+        }
         joinTournament(data.tournament.id);
       } else {
         setTournament(null);
         setParticipants([]);
         setCount(0);
         setCanStart(false);
+        setLobbyExpiresAt(null);
       }
     } catch (err: any) {
       setError(err.message || 'Error de conexión con el servidor.');
@@ -113,10 +123,17 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
       participants: LobbyParticipant[];
       count: number;
       canStart: boolean;
+      lobbyExpiresAt?: string | null;
     }) => {
       setParticipants(payload.participants || []);
-      setCount(payload.count ?? payload.participants?.length ?? 0);
-      setCanStart(payload.canStart ?? (payload.participants?.length >= 4));
+      const newCount = payload.count ?? payload.participants?.length ?? 0;
+      setCount(newCount);
+      setCanStart(payload.canStart ?? (newCount >= 4));
+      if (payload.lobbyExpiresAt) {
+        setLobbyExpiresAt(payload.lobbyExpiresAt);
+      } else if (payload.lobbyExpiresAt === null || newCount < 4) {
+        setLobbyExpiresAt(null);
+      }
       setError(null);
     };
 
@@ -126,11 +143,19 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
       onProceedToVoting?.();
     };
 
+    const handleTournamentStatus = (payload: any) => {
+      if (payload?.status === 'VOTING_FORMAT' || payload?.status === 'VOTING_THEME') {
+        onProceedToVoting?.();
+      }
+    };
+
     socket.on('vote:started', handleVoteStarted);
+    socket.on('tournament:status', handleTournamentStatus);
 
     return () => {
       socket.off('lobby:updated', handleLobbyUpdated);
       socket.off('vote:started', handleVoteStarted);
+      socket.off('tournament:status', handleTournamentStatus);
     };
   }, [socket, onProceedToVoting]);
 
@@ -581,14 +606,39 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
 
       {/* Advance to Voting Section (RF-98: Autonomous start when quorum >= 4) */}
       <Panel title="Siguiente Paso" subtitle="Votación de Formato">
-        <div className="max-w-md mx-auto space-y-1.5">
+        <div className="max-w-md mx-auto space-y-2 text-center">
           <h4 className="font-display text-sm font-bold uppercase tracking-wider text-foreground">
             Siguiente Paso: Votación de Formato
           </h4>
+
+          {/* 120s Prominent Countdown when Quorum Reached (>= 4) */}
+          {count >= 4 && (
+            <div className="my-4 flex flex-col items-center justify-center rounded-xl border border-primary/40 bg-primary/10 p-5 text-center shadow-lg backdrop-blur-sm">
+              <span className="text-xs font-bold uppercase tracking-widest text-primary flex items-center gap-1.5 mb-1.5">
+                <Clock className="h-4 w-4 animate-spin text-primary" />
+                Esperando más amigos para la juntada
+              </span>
+              <div
+                className={`font-mono text-4xl sm:text-5xl font-black tracking-widest py-1 transition-all ${
+                  countdown.secondsLeft <= 15
+                    ? 'text-destructive animate-pulse'
+                    : countdown.secondsLeft <= 45
+                    ? 'text-accent'
+                    : 'text-primary glow-green'
+                }`}
+              >
+                {countdown.formattedTime}
+              </div>
+              <p className="text-xs text-muted-foreground mt-2 max-w-sm">
+                Al llegar a cero o al tocar &quot;Iniciar Votación Ahora&quot;, avanzamos automáticamente a la votación de formato.
+              </p>
+            </div>
+          )}
+
           <p className="text-xs text-muted-foreground">
             {isQuorumReached(count)
               ? isUserConfirmed
-                ? '¡Quórum alcanzado! Como jugador confirmado podés dar inicio a la votación de formato.'
+                ? '¡Quórum alcanzado! Podés esperar a los demás amigos o ir directamente a la votación.'
                 : 'Quórum alcanzado. Confirmá tu presencia arriba para habilitar el inicio.'
               : `Faltan ${getMissingPlayersForQuorum(count)} jugador${
                   getMissingPlayersForQuorum(count) === 1 ? '' : 'es'
@@ -596,7 +646,7 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
           </p>
         </div>
 
-        <div className="flex justify-center">
+        <div className="flex justify-center mt-4">
           <PrimaryButton
             type="button"
             disabled={!canInitiateTournament(count, isUserConfirmed) || actionLoading}
@@ -608,7 +658,7 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
             }`}
           >
             <Play className="h-4 w-4" />
-            <span>Iniciar Votación de Formato</span>
+            <span>{count >= 4 ? 'Iniciar Votación Ahora (Ya estamos todos)' : 'Iniciar Votación de Formato'}</span>
           </PrimaryButton>
         </div>
       </Panel>

@@ -42,9 +42,11 @@ interface HeaderProps {
 export function Header({ currentView, onNavigate }: HeaderProps) {
   const { activeTournament } = useAppState();
   const dispatch = useAppDispatch();
-  const { user, displayName, isAdmin, isLoading, loginWithGoogle, logout } = useAuth();
+  const { user, displayName, isAdmin, isLoading, loginWithGoogle, devLogin, logout } = useAuth();
   const { isOffline, offlineReason } = useNetworkStatus();
   const [isWhitelistOpen, setIsWhitelistOpen] = useState(false);
+  const [isDevMenuOpen, setIsDevMenuOpen] = useState(false);
+  const [customDevEmail, setCustomDevEmail] = useState('');
 
   const isDoubleElimination =
     activeTournament?.tournamentType === 'double_elimination';
@@ -248,6 +250,97 @@ export function Header({ currentView, onNavigate }: HeaderProps) {
             <BookOpen className="h-3.5 w-3.5 text-accent" />
             <span>Reglamento</span>
           </button>
+
+          {/* Dev-Login Quick Switcher (DEV Only DX) */}
+          {import.meta.env.DEV && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsDevMenuOpen(!isDevMenuOpen)}
+                className="flex items-center gap-1.5 rounded-sm border border-purple-500/50 bg-purple-500/10 hover:bg-purple-500/25 text-purple-300 px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wider transition"
+                title="Selector rápido de inicio de sesión para desarrollo"
+              >
+                <span>🛠️ Dev Login</span>
+              </button>
+
+              {isDevMenuOpen && (
+                <div className="absolute right-0 top-full mt-1.5 w-64 rounded-md border border-purple-500/40 bg-zinc-900/95 p-3 shadow-2xl z-50 flex flex-col gap-2.5 backdrop-blur-md">
+                  <div className="flex items-center justify-between border-b border-border/60 pb-1.5 text-xs font-bold text-foreground">
+                    <span>🛠️ Cambiar Usuario (Dev)</span>
+                    <button
+                      type="button"
+                      onClick={() => setIsDevMenuOpen(false)}
+                      className="text-muted-foreground hover:text-foreground text-xs p-0.5"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">
+                      Jugadores Sembrados:
+                    </span>
+                    {[
+                      { email: 'admin@example.com', label: 'Marco Barzola (Admin)', role: 'ADMIN' },
+                      { email: 'juan@test.com', label: 'Juan Torres', role: 'PLAYER' },
+                      { email: 'santi@test.com', label: 'Santi Aguilar', role: 'PLAYER' },
+                      { email: 'marto@test.com', label: 'Marto Audicio', role: 'PLAYER' },
+                    ].map((devUser) => (
+                      <button
+                        key={devUser.email}
+                        type="button"
+                        onClick={async () => {
+                          await devLogin(devUser.email);
+                          setIsDevMenuOpen(false);
+                        }}
+                        className={`flex items-center justify-between rounded px-2 py-1.5 text-xs text-left transition ${
+                          user?.email === devUser.email
+                            ? 'bg-purple-600/30 text-purple-200 border border-purple-500/50 font-bold'
+                            : 'hover:bg-secondary text-foreground'
+                        }`}
+                      >
+                        <span className="truncate">{devUser.label}</span>
+                        <span className="text-[10px] text-muted-foreground font-mono shrink-0 ml-1">
+                          {devUser.role === 'ADMIN' ? '👑' : '⚽'}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (customDevEmail.trim()) {
+                        await devLogin(customDevEmail.trim());
+                        setCustomDevEmail('');
+                        setIsDevMenuOpen(false);
+                      }
+                    }}
+                    className="border-t border-border/60 pt-2 flex flex-col gap-1.5"
+                  >
+                    <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">
+                      Otro correo whitelist:
+                    </span>
+                    <div className="flex gap-1">
+                      <input
+                        type="email"
+                        placeholder="otro@test.com"
+                        value={customDevEmail}
+                        onChange={(e) => setCustomDevEmail(e.target.value)}
+                        className="w-full bg-secondary text-xs rounded border border-border px-2 py-1 text-foreground placeholder:text-muted-foreground/60 focus:border-purple-500 focus:outline-none"
+                      />
+                      <button
+                        type="submit"
+                        className="bg-purple-600 hover:bg-purple-500 text-white text-xs px-2.5 py-1 rounded font-bold transition shrink-0"
+                      >
+                        Entrar
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* User Auth Profile & Role (RF-90) */}
           {user ? (

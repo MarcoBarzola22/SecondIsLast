@@ -109,13 +109,17 @@ export function startVotingSession(
 
   // Broadcast vote:started event
   if (io) {
-    const payload: VoteStartedPayload = {
-      phase,
-      options,
-      expiresAt,
-      totalVoters,
-    };
-    io.to(`tournament:${tournamentId}`).emit('vote:started', payload);
+    try {
+      const payload: VoteStartedPayload = {
+        phase,
+        options,
+        expiresAt,
+        totalVoters,
+      };
+      io.to(`tournament:${tournamentId}`).emit('vote:started', payload);
+    } catch (err) {
+      console.warn('[VotingHandler] Error emitting vote:started:', err);
+    }
   }
 
   return session;
@@ -132,12 +136,16 @@ export function broadcastVoteUpdated(
   totalVoters: number
 ): void {
   if (io) {
-    const payload: VoteUpdatedPayload = {
-      phase,
-      votesCast,
-      totalVoters,
-    };
-    io.to(`tournament:${tournamentId}`).emit('vote:updated', payload);
+    try {
+      const payload: VoteUpdatedPayload = {
+        phase,
+        votesCast,
+        totalVoters,
+      };
+      io.to(`tournament:${tournamentId}`).emit('vote:updated', payload);
+    } catch (err) {
+      console.warn('[VotingHandler] Error emitting vote:updated:', err);
+    }
   }
 }
 
@@ -181,11 +189,35 @@ export async function closeVotingSession(
 
   // 3. Persist winner in tournament record
   if (session.phase === 'FORMAT') {
-    const prismaFormat = mapDomainFormatToPrisma(result.winner);
+    let resolvedFormat = result.winner;
+    if (resolvedFormat.toLowerCase() === 'random') {
+      const validWithoutRandom = session.options.filter((o) => o.toLowerCase() !== 'random');
+      const randIdx = Math.floor(Math.random() * validWithoutRandom.length);
+      resolvedFormat = validWithoutRandom[randIdx] || 'bracket';
+    }
+
+    const prismaFormat = mapDomainFormatToPrisma(resolvedFormat);
+
+    // Tally matchFormat votes from tournament settings if present
+    const tourney = await prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      select: { settings: true },
+    });
+    const settings = (tourney?.settings as any) || {};
+    const matchFormatVotes = settings.matchFormatVotes || {};
+    let twoLeggedCount = 0;
+    let singleMatchCount = 0;
+    for (const val of Object.values(matchFormatVotes)) {
+      if (val === 'TWO_LEGGED') twoLeggedCount++;
+      else singleMatchCount++;
+    }
+    const winnerMatchFormat = twoLeggedCount > singleMatchCount ? 'TWO_LEGGED' : 'SINGLE_MATCH';
+
     await prisma.tournament.update({
       where: { id: tournamentId },
       data: {
         format: prismaFormat,
+        matchFormat: winnerMatchFormat as any,
       },
     });
   } else if (session.phase === 'THEME') {

@@ -7,6 +7,9 @@ import {
   isFormatValidForParticipants,
   shouldCloseVoting,
   VOTING_DURATION_SECONDS,
+  getFormatVotingOptions,
+  resolveFormatWinner,
+  MATCH_FORMAT_OPTIONS,
 } from '../voting';
 import { createMulberry32, createSeqRng } from './helpers';
 
@@ -311,6 +314,39 @@ describe('voting domain logic', () => {
       // Condition 2: 100% voted even before time expired
       expect(shouldCloseVoting(4, 4, 15)).toBe(true);
       expect(shouldCloseVoting(6, 6, 45)).toBe(true);
+    });
+  });
+
+  describe('Random format & match modality options (T28)', () => {
+    it('getFormatVotingOptions includes all valid formats plus random', () => {
+      const optionsFor4 = getFormatVotingOptions(4);
+      expect(optionsFor4).toContain('random');
+      expect(optionsFor4).toContain('bracket');
+      expect(optionsFor4).toContain('league');
+      expect(optionsFor4).not.toContain('group_stage');
+      expect(optionsFor4).toHaveLength(5);
+
+      const optionsFor6 = getFormatVotingOptions(6);
+      expect(optionsFor6).toContain('random');
+      expect(optionsFor6).toContain('group_stage');
+      expect(optionsFor6).toHaveLength(6);
+    });
+
+    it('resolveFormatWinner resolves random to a valid format using RNG', () => {
+      const validFormats = getValidFormatsForParticipants(4);
+      const chosen = resolveFormatWinner('random', validFormats, () => 0);
+      expect(chosen).toBe(validFormats[0]);
+
+      const chosenLast = resolveFormatWinner('random', validFormats, () => 0.99);
+      expect(chosenLast).toBe(validFormats[validFormats.length - 1]);
+
+      // If winner is already a specific format, returns it directly
+      expect(resolveFormatWinner('league', validFormats)).toBe('league');
+    });
+
+    it('exposes MATCH_FORMAT_OPTIONS for SINGLE_MATCH and TWO_LEGGED', () => {
+      expect(MATCH_FORMAT_OPTIONS).toContain('SINGLE_MATCH');
+      expect(MATCH_FORMAT_OPTIONS).toContain('TWO_LEGGED');
     });
   });
 });

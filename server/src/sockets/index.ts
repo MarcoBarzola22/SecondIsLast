@@ -108,6 +108,10 @@ export function initSocketServer(
   io.use(createSocketAuthMiddleware());
 
   io.on('connection', (socket: Socket) => {
+    socket.on('error', (err) => {
+      console.warn(`[Socket] Error on client socket ${socket.id}:`, err?.message || err);
+    });
+
     // Auto-join room if tournamentId is supplied during connection handshake
     const initialTournamentId =
       socket.handshake.auth?.tournamentId ||

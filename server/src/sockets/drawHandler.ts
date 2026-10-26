@@ -88,7 +88,11 @@ export function startDrawAnimation(
     };
 
     if (io) {
-      io.to(`tournament:${tournamentId}`).emit('draw:animated', payload);
+      try {
+        io.to(`tournament:${tournamentId}`).emit('draw:animated', payload);
+      } catch (err) {
+        console.warn('[DrawHandler] Error emitting draw:animated:', err);
+      }
     }
 
     if (stepData.isFinal) {
@@ -112,11 +116,15 @@ export function startDrawAnimation(
   if (plan.steps.length > 1) {
     let currentIdx = 0;
     session.timer = setInterval(() => {
-      currentIdx++;
-      emitStep(currentIdx);
-      if (currentIdx >= plan.steps.length - 1 && session.timer) {
-        clearInterval(session.timer);
-        session.timer = undefined;
+      try {
+        currentIdx++;
+        emitStep(currentIdx);
+        if (currentIdx >= plan.steps.length - 1 && session.timer) {
+          clearInterval(session.timer);
+          session.timer = undefined;
+        }
+      } catch (err) {
+        console.error('[DrawHandler] Error in draw interval:', err);
       }
     }, intervalMs);
   }

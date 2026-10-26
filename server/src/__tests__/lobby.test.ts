@@ -277,6 +277,8 @@ describe('Lobby, Presence & Quorum API and WebSocket Events (T13 · RF-93 to RF-
       const socketPayload = await updatedPromise;
       expect(socketPayload.count).toBe(4);
       expect(socketPayload.canStart).toBe(true);
+      expect(socketPayload.lobbyExpiresAt).toBeDefined();
+      expect(typeof socketPayload.lobbyExpiresAt).toBe('string');
     });
   });
 

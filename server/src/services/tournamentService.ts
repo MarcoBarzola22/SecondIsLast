@@ -1,7 +1,7 @@
 import { PrismaClient, Role, Tournament, TournamentParticipant, TournamentStatus } from '@prisma/client';
 import { prisma as defaultPrisma } from '../db.js';
 import type { AuthUser } from '../types/auth.js';
-import { getValidFormatsForParticipants } from '../domain/voting.js';
+import { getFormatVotingOptions } from '../domain/voting.js';
 import {
   getAvailableTeamsForTheme,
   validateTeamList,
@@ -407,8 +407,8 @@ export class TournamentService {
       throw new ForbiddenError('Solo un participante confirmado o un administrador puede iniciar la votación.');
     }
 
-    // Filter valid formats based strictly on N (RF-99: exclude group_stage if N != 6 and N != 9)
-    const options = getValidFormatsForParticipants(count);
+    // Filter valid formats based strictly on N (RF-99), including explicit RANDOM option
+    const options = getFormatVotingOptions(count);
 
     const updatedTournament = await this.prisma.tournament.update({
       where: { id: tournament.id },
@@ -432,6 +432,7 @@ export class TournamentService {
     user: AuthUser,
     phase: 'FORMAT' | 'THEME',
     choice: string,
+    matchFormat?: string,
     tournamentId?: string
   ): Promise<{
     tournament: Tournament;
@@ -485,6 +486,22 @@ export class TournamentService {
         choice,
       },
     });
+
+    // If matchFormat was voted during FORMAT phase, store vote in settings
+    if (phase === 'FORMAT' && matchFormat && (matchFormat === 'SINGLE_MATCH' || matchFormat === 'TWO_LEGGED')) {
+      const currentSettings = (tournament.settings as any) || {};
+      const matchFormatVotes = currentSettings.matchFormatVotes || {};
+      matchFormatVotes[participant.id] = matchFormat;
+      await this.prisma.tournament.update({
+        where: { id: tournament.id },
+        data: {
+          settings: {
+            ...currentSettings,
+            matchFormatVotes,
+          },
+        },
+      });
+    }
 
     const votesCast = await this.prisma.tournamentVote.count({
       where: {

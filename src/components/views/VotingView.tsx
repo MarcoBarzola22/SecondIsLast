@@ -73,6 +73,12 @@ const FORMAT_METADATA: Record<string, FormatMeta> = {
     description: 'Dos o más grupos con avance a semifinales/final. (Disponible solo para 6 y 9 jugadores).',
     icon: Layers,
   },
+  random: {
+    title: '🎲 Sortear Formato al Azar',
+    badge: 'Ruleta Rápida',
+    description: 'La máquina elige al azar un formato matemáticamente válido para la cantidad de pibes presentes.',
+    icon: Dices,
+  },
 };
 
 export function VotingView({
@@ -92,6 +98,7 @@ export function VotingView({
   const [votesCast, setVotesCast] = useState<number>(0);
   const [totalVoters, setTotalVoters] = useState<number>(initialTotalVoters);
   const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
+  const [selectedMatchFormat, setSelectedMatchFormat] = useState<'SINGLE_MATCH' | 'TWO_LEGGED'>('SINGLE_MATCH');
   const [voteResult, setVoteResult] = useState<VoteEndedPayload | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -137,25 +144,64 @@ export function VotingView({
     socket.on('vote:updated', handleVoteUpdated);
     socket.on('vote:ended', handleVoteEnded);
 
-    // Initial sync
-    if (tournamentId) {
-      socket.emit('vote:sync', tournamentId, (res: any) => {
-        if (res?.ok && res.session) {
-          setPhase(res.session.phase);
-          setOptions(res.session.options);
-          setExpiresAt(res.session.expiresAt);
-          setTotalVoters(res.session.totalVoters);
-          setVotesCast(res.session.votesCast || 0);
-        }
-      });
-    }
-
     return () => {
       socket.off('vote:started', handleVoteStarted);
       socket.off('vote:updated', handleVoteUpdated);
       socket.off('vote:ended', handleVoteEnded);
     };
-  }, [socket, tournamentId]);
+  }, [socket]);
+
+  // Sync session and timer on mount if missing tournamentId or expiresAt (T28)
+  useEffect(() => {
+    let isMounted = true;
+
+    async function syncActiveVotingSession() {
+      let currentId = tournamentId;
+
+      if (!currentId || !expiresAt) {
+        try {
+          const res = await fetch('/api/tournaments/active', {
+            headers: { Accept: 'application/json' },
+            credentials: 'include',
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.tournament) {
+              currentId = data.tournament.id;
+              const vs = data.tournament.votingSession || data.votingSession;
+              if (vs && isMounted) {
+                if (vs.phase) setPhase(vs.phase);
+                if (vs.options) setOptions(vs.options);
+                if (vs.expiresAt) setExpiresAt(vs.expiresAt);
+                if (vs.totalVoters) setTotalVoters(vs.totalVoters);
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[VotingView] Error fetching active tournament on mount:', err);
+        }
+      }
+
+      if (currentId && socket) {
+        socket.emit('vote:sync', currentId, (res: any) => {
+          if (!isMounted) return;
+          if (res?.ok && res.session) {
+            setPhase(res.session.phase);
+            setOptions(res.session.options);
+            setExpiresAt(res.session.expiresAt);
+            setTotalVoters(res.session.totalVoters);
+            setVotesCast(res.session.votesCast || 0);
+          }
+        });
+      }
+    }
+
+    syncActiveVotingSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [tournamentId, expiresAt, socket]);
 
   // Submit vote to server
   const handleVote = useCallback(
@@ -173,6 +219,7 @@ export function VotingView({
           body: JSON.stringify({
             phase,
             choice,
+            matchFormat: phase === 'FORMAT' ? selectedMatchFormat : undefined,
             tournamentId,
           }),
           credentials: 'include',
@@ -195,7 +242,7 @@ export function VotingView({
         setIsSubmitting(false);
       }
     },
-    [isAuthenticated, isSubmitting, voteResult, phase, tournamentId]
+    [isAuthenticated, isSubmitting, voteResult, phase, selectedMatchFormat, tournamentId]
   );
 
   const formatWinnerName = voteResult
@@ -416,6 +463,47 @@ export function VotingView({
               );
             })}
           </div>
+
+          {/* Modality selector: Single Match vs Two-Legged (RF-105) */}
+          {phase === 'FORMAT' && (
+            <div className="flex flex-col gap-2 rounded-md border border-border/80 bg-secondary/30 p-3.5 mt-4">
+              <span className="font-display text-xs font-bold uppercase tracking-wider text-foreground">
+                Modalidad de Cruces / Partidos:
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setSelectedMatchFormat('SINGLE_MATCH')}
+                  className={`flex items-center justify-between p-2.5 rounded border text-xs font-semibold transition ${
+                    selectedMatchFormat === 'SINGLE_MATCH'
+                      ? 'border-primary bg-primary/20 text-primary font-bold glow-green'
+                      : 'border-border bg-secondary/50 text-muted-foreground hover:border-border/80'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">⚽</span>
+                    <span>Partido Único (90 min)</span>
+                  </div>
+                  {selectedMatchFormat === 'SINGLE_MATCH' && <CheckCircle2 className="h-4 w-4 text-primary" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMatchFormat('TWO_LEGGED')}
+                  className={`flex items-center justify-between p-2.5 rounded border text-xs font-semibold transition ${
+                    selectedMatchFormat === 'TWO_LEGGED'
+                      ? 'border-accent bg-accent/20 text-accent font-bold glow-orange'
+                      : 'border-border bg-secondary/50 text-muted-foreground hover:border-border/80'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">🔄</span>
+                    <span>Ida y Vuelta (Series de 2)</span>
+                  </div>
+                  {selectedMatchFormat === 'TWO_LEGGED' && <CheckCircle2 className="h-4 w-4 text-accent" />}
+                </button>
+              </div>
+            </div>
+          )}
         </Panel>
       )}
     </div>

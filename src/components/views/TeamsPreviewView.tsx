@@ -82,6 +82,8 @@ export function TeamsPreviewView({
   const [totalVoters, setTotalVoters] = useState<number>(participantCount);
   const [isSubmittingVote, setIsSubmittingVote] = useState<boolean>(false);
   const [winnerAnnouncement, setWinnerAnnouncement] = useState<string | null>(null);
+  const [isRouletteActive, setIsRouletteActive] = useState<boolean>(false);
+  const [rouletteCandidate, setRouletteCandidate] = useState<'DIRECT_DRAW' | 'DRAFT_ORDER'>('DIRECT_DRAW');
   const [voteResult, setVoteResult] = useState<{
     winner: string;
     wasDraw?: boolean;
@@ -203,12 +205,48 @@ export function TeamsPreviewView({
       winner === 'DIRECT_DRAW'
         ? 'Sorteo Directo de Equipos'
         : 'Sorteo de Orden de Elección (Draft)';
-    setWinnerAnnouncement(winnerTitle);
 
-    // Mostrar cartel del Método Ganador durante 3 segundos
-    setTimeout(() => {
-      setWinnerAnnouncement(null);
-    }, 3000);
+    const totalVotes = Object.values(voteCounts || {}).reduce((a, b) => a + b, 0);
+    const isTieOrZero = wasDraw || totalVotes === 0;
+
+    if (isTieOrZero) {
+      setIsRouletteActive(true);
+      const candidates: Array<'DIRECT_DRAW' | 'DRAFT_ORDER'> = ['DIRECT_DRAW', 'DRAFT_ORDER'];
+      let idx = 0;
+      let active = true;
+      const startTime = Date.now();
+      let timeoutId: ReturnType<typeof setTimeout>;
+
+      const tick = () => {
+        if (!active) return;
+        const elapsed = Date.now() - startTime;
+        if (elapsed >= 3500) {
+          clearTimeout(timeoutId);
+          setIsRouletteActive(false);
+          setWinnerAnnouncement(winnerTitle);
+
+          setTimeout(() => {
+            setWinnerAnnouncement(null);
+          }, 5000);
+          return;
+        }
+        idx = (idx + 1) % candidates.length;
+        setRouletteCandidate(candidates[idx]!);
+
+        // Decelerate in the final 1100ms
+        const delay = elapsed > 2400 ? 140 + Math.min(180, Math.floor((elapsed - 2400) / 150) * 40) : 140;
+        timeoutId = setTimeout(tick, delay);
+      };
+
+      timeoutId = setTimeout(tick, 140);
+    } else {
+      setIsRouletteActive(false);
+      setWinnerAnnouncement(winnerTitle);
+
+      setTimeout(() => {
+        setWinnerAnnouncement(null);
+      }, 5500);
+    }
   }, []);
 
   // Synchronized WebSocket event listeners (RF-104, T33)
@@ -233,7 +271,7 @@ export function TeamsPreviewView({
           setDraftOrderResults(payload.draftOrder);
         }
 
-        // Deja visible durante 3 segundos el resultado final del sorteo y luego navega automáticamente
+        // Deja visible durante 6 segundos el resultado final del orden de draft y luego navega automáticamente (RF-104, T42)
         setTimeout(() => {
           const finalMethod = (payload.method || assignmentMethod).toUpperCase();
           if (finalMethod === 'DRAFT_ORDER') {
@@ -241,7 +279,7 @@ export function TeamsPreviewView({
               onProceedToFixture('DRAFT_ORDER');
             }
           }
-        }, 3000);
+        }, 6000);
       }
     };
 
@@ -323,29 +361,17 @@ export function TeamsPreviewView({
         .then((res) => res.json())
         .then((data) => {
           if (data?.winner) {
-            const winner = data.winner.toUpperCase() === 'DRAFT_ORDER' ? 'DRAFT_ORDER' : 'DIRECT_DRAW';
-            setAssignmentMethod(winner);
-            setHasVotingEnded(true);
-            setVoteResult({
-              winner,
-              wasDraw: data.wasDraw,
-              tiedOptions: data.tiedOptions,
-              voteCounts: data.voteCounts,
-            });
-            const winnerTitle =
-              winner === 'DIRECT_DRAW'
-                ? 'Sorteo Directo de Equipos'
-                : 'Sorteo de Orden de Elección (Draft)';
-            setWinnerAnnouncement(winnerTitle);
-
-            setTimeout(() => {
-              setWinnerAnnouncement(null);
-            }, 3000);
+            announceWinnerAndAutoAdvance(
+              data.winner,
+              data.wasDraw,
+              data.tiedOptions,
+              data.voteCounts
+            );
           }
         })
         .catch((err) => console.warn('[TeamsPreviewView] Error closing voting on timeout:', err));
     }
-  }, [votingExpiresAt, votingCountdown.isExpired, hasVotingEnded, tournamentId]);
+  }, [votingExpiresAt, votingCountdown.isExpired, hasVotingEnded, tournamentId, announceWinnerAndAutoAdvance]);
 
   // Confirm vote for assignment method directly from card buttons (T33, T34, T35)
   const handleConfirmVote = async (choice: 'DIRECT_DRAW' | 'DRAFT_ORDER') => {
@@ -368,24 +394,12 @@ export function TeamsPreviewView({
       }
       setVotedChoice(choice);
       if (data.result?.winner) {
-        const winner = data.result.winner.toUpperCase() === 'DRAFT_ORDER' ? 'DRAFT_ORDER' : 'DIRECT_DRAW';
-        setAssignmentMethod(winner);
-        setHasVotingEnded(true);
-        setVoteResult({
-          winner,
-          wasDraw: data.result.wasDraw,
-          tiedOptions: data.result.tiedOptions,
-          voteCounts: data.result.voteCounts,
-        });
-        const winnerTitle =
-          winner === 'DIRECT_DRAW'
-            ? 'Sorteo Directo de Equipos'
-            : 'Sorteo de Orden de Elección (Draft)';
-        setWinnerAnnouncement(winnerTitle);
-
-        setTimeout(() => {
-          setWinnerAnnouncement(null);
-        }, 3000);
+        announceWinnerAndAutoAdvance(
+          data.result.winner,
+          data.result.wasDraw,
+          data.result.tiedOptions,
+          data.result.voteCounts
+        );
       }
     } catch (err: any) {
       setError(err.message || 'Error al enviar voto.');
@@ -592,6 +606,25 @@ export function TeamsPreviewView({
                   </p>
                 )}
               </div>
+            ) : isRouletteActive ? (
+              <div className="py-8 px-4 flex flex-col items-center justify-center space-y-4 rounded-2xl border-2 border-accent/80 bg-accent/10 glow-orange animate-pulse">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-accent/20 border-2 border-accent text-accent">
+                  <Dices className="h-8 w-8 animate-spin" />
+                </div>
+                <div className="space-y-1.5 text-center">
+                  <span className="text-xs font-bold uppercase tracking-widest text-accent font-mono">
+                    🎲 {voteResult?.wasDraw ? '¡Desempate en Vivo por Ruleta!' : '¡Sorteo Automático al Azar!'}
+                  </span>
+                  <h3 className="font-display text-2xl sm:text-3xl font-black text-foreground uppercase tracking-wider">
+                    {rouletteCandidate === 'DIRECT_DRAW'
+                      ? 'Sorteo Directo de Equipos'
+                      : 'Sorteo de Orden de Elección (Draft)'}
+                  </h3>
+                </div>
+                <p className="text-xs text-muted-foreground font-mono">
+                  Sorteando método de asignación...
+                </p>
+              </div>
             ) : (
               <div className="flex flex-col gap-4 rounded-xl border-2 border-primary/70 bg-gradient-to-b from-primary/15 to-secondary/30 p-5 shadow-xl glow-green">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-primary/20 pb-3">
@@ -610,11 +643,29 @@ export function TeamsPreviewView({
                       </h3>
                     </div>
                   </div>
-                  {voteResult && (
-                    <span className="text-xs font-mono text-muted-foreground bg-background/80 px-2.5 py-1 rounded border border-border">
-                      Resultado: {voteResult.voteCounts?.DIRECT_DRAW || 0} directos vs {voteResult.voteCounts?.DRAFT_ORDER || 0} draft
-                    </span>
-                  )}
+                  {voteResult && (() => {
+                    const directVotes = voteResult.voteCounts?.DIRECT_DRAW || 0;
+                    const draftVotes = voteResult.voteCounts?.DRAFT_ORDER || 0;
+                    const totalVotes = directVotes + draftVotes;
+
+                    if (totalVotes === 0) {
+                      return (
+                        <span className="text-xs font-mono text-muted-foreground bg-background/80 px-2.5 py-1 rounded border border-border">
+                          Sin votos emitidos — Definido por sorteo automático al azar
+                        </span>
+                      );
+                    }
+
+                    const parts: string[] = [];
+                    if (directVotes > 0) parts.push(`${directVotes} directo${directVotes === 1 ? '' : 's'}`);
+                    if (draftVotes > 0) parts.push(`${draftVotes} draft`);
+
+                    return (
+                      <span className="text-xs font-mono text-muted-foreground bg-background/80 px-2.5 py-1 rounded border border-border">
+                        Resultado: {parts.join(' vs ')}
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 {voteResult?.wasDraw && (
@@ -625,17 +676,19 @@ export function TeamsPreviewView({
                 )}
 
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-1">
-                  <p className="text-xs text-muted-foreground">
-                    {assignmentMethod === 'DIRECT_DRAW'
-                      ? 'Cualquier participante confirmado puede iniciar el sorteo. Los equipos se distribuirán al azar.'
-                      : 'Cualquier participante confirmado puede iniciar el sorteo de orden. Se establecerán turnos de 20 segundos.'}
-                  </p>
+                  <div className="flex items-center gap-2 text-xs text-primary font-mono bg-primary/10 border border-primary/30 px-3.5 py-1.5 rounded-full animate-pulse">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                    </span>
+                    <span>Avanzando automáticamente a la siguiente etapa...</span>
+                  </div>
 
                   <PrimaryButton
                     type="button"
                     disabled={isDrawing || (assignmentMethod === 'DIRECT_DRAW' && !hasEnoughTeams)}
                     onClick={() => handleStartDraw()}
-                    className="text-xs px-6 py-3 glow-green font-bold shrink-0 w-full sm:w-auto"
+                    className="text-xs px-6 py-2.5 glow-green font-bold shrink-0 w-full sm:w-auto"
                   >
                     <Shuffle className="h-4 w-4 mr-2" />
                     <span>
@@ -949,8 +1002,30 @@ export function TeamsPreviewView({
         </div>
       )}
 
-      {/* Cartel Grande: Anuncio del Método Ganador (3 segundos) (T35) */}
-      {winnerAnnouncement && (
+      {/* Cartel Ruleta de Desempate / Sorteo en Vivo (2.5 segundos) (T41) */}
+      {isRouletteActive && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/85 backdrop-blur-md animate-in fade-in zoom-in-95 duration-200">
+          <div className="mx-4 max-w-lg w-full rounded-2xl border-4 border-accent bg-background/95 p-8 text-center shadow-[0_0_50px_rgba(249,115,22,0.35)] space-y-4">
+            <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-accent/20 border-2 border-accent text-accent">
+              <Dices className="h-10 w-10 animate-spin" />
+            </div>
+            <span className="text-xs font-bold uppercase tracking-widest text-accent font-mono">
+              🎲 ¡Desempate en Vivo por Ruleta!
+            </span>
+            <h2 className="text-2xl sm:text-3xl font-black text-foreground">
+              {rouletteCandidate === 'DIRECT_DRAW'
+                ? 'Sorteo Directo de Equipos'
+                : 'Sorteo de Orden de Elección (Draft)'}
+            </h2>
+            <p className="text-xs text-muted-foreground font-mono">
+              Sorteando método de asignación...
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Cartel Grande: Anuncio del Método Ganador (3 segundos) (T35, T41) */}
+      {winnerAnnouncement && !isRouletteActive && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/85 backdrop-blur-md animate-in fade-in zoom-in-95 duration-200">
           <div className="mx-4 max-w-lg w-full rounded-2xl border-4 border-primary bg-background/95 p-8 text-center shadow-[0_0_50px_rgba(74,222,128,0.35)] space-y-4">
             <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-primary/20 border-2 border-primary text-primary">

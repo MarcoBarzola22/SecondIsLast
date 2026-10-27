@@ -10,7 +10,6 @@ import {
   Layers,
   ListOrdered,
   Sparkles,
-  ArrowRight,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
@@ -87,7 +86,7 @@ export function VotingView({
   initialExpiresAt = null,
   initialOptions = ['bracket', 'league', 'league_playoffs', 'double_elimination'],
   initialTotalVoters = 4,
-  onProceedNext,
+  onProceedNext: _onProceedNext,
 }: VotingViewProps) {
   const { isAuthenticated } = useAuth();
   const { socket, isConnected } = useSocket();
@@ -102,11 +101,70 @@ export function VotingView({
   const [selectedMatchFormat, setSelectedMatchFormat] = useState<'SINGLE_MATCH' | 'TWO_LEGGED'>('SINGLE_MATCH');
   const [isVoteConfirmed, setIsVoteConfirmed] = useState<boolean>(false);
   const [voteResult, setVoteResult] = useState<VoteEndedPayload | null>(null);
+  const [isRouletteActive, setIsRouletteActive] = useState<boolean>(false);
+  const [rouletteOption, setRouletteOption] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [isAdvancingPhase, setIsAdvancingPhase] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const countdown = useCountdown(expiresAt, 60);
+
+  // Live Tiebreak / Random Roulette Animation (3.5 seconds with deceleration) (T41, T42)
+  useEffect(() => {
+    if (!voteResult) {
+      setIsRouletteActive(false);
+      return;
+    }
+
+    const totalVotes = Object.values(voteResult.voteCounts || {}).reduce((a, b) => a + b, 0);
+    const isTieOrRandomOrZero =
+      voteResult.wasDraw ||
+      voteResult.winner.toLowerCase() === 'random' ||
+      totalVotes === 0;
+
+    if (isTieOrRandomOrZero) {
+      setIsRouletteActive(true);
+      const pool =
+        voteResult.tiedOptions && voteResult.tiedOptions.length > 0
+          ? voteResult.tiedOptions
+          : options.length > 0
+          ? options.filter((o) => o.toLowerCase() !== 'random')
+          : phase === 'FORMAT'
+          ? ['bracket', 'league', 'double_elimination']
+          : ['world_cup_2026', 'champions_league', 'copa_libertadores'];
+
+      const finalPool = pool.length > 0 ? pool : [voteResult.winner];
+      setRouletteOption(finalPool[0] || voteResult.winner);
+
+      let idx = 0;
+      let active = true;
+      const startTime = Date.now();
+      let timeoutId: ReturnType<typeof setTimeout>;
+
+      const tick = () => {
+        if (!active) return;
+        const elapsed = Date.now() - startTime;
+        if (elapsed >= 3500) {
+          setIsRouletteActive(false);
+          return;
+        }
+        idx = (idx + 1) % finalPool.length;
+        setRouletteOption(finalPool[idx]!);
+
+        // Decelerate in the final 1100ms
+        const delay = elapsed > 2400 ? 140 + Math.min(180, Math.floor((elapsed - 2400) / 150) * 40) : 140;
+        timeoutId = setTimeout(tick, delay);
+      };
+
+      timeoutId = setTimeout(tick, 140);
+
+      return () => {
+        active = false;
+        clearTimeout(timeoutId);
+      };
+    } else {
+      setIsRouletteActive(false);
+    }
+  }, [voteResult, options, phase]);
 
   // Sync state via WebSockets (RF-99, RF-100, RF-101)
   useEffect(() => {
@@ -241,41 +299,6 @@ export function VotingView({
     }
   }, [countdown.isExpired, voteResult, tournamentId, expiresAt]);
 
-  // Trigger phase advance to Equipos/Temática (T32, T38: Autonomía total)
-  const handleAdvancePhase = useCallback(async () => {
-    if (isAdvancingPhase) return;
-    try {
-      setIsAdvancingPhase(true);
-      setError(null);
-      if (voteResult?.phase === 'FORMAT') {
-        await fetch('/api/tournaments/start-voting', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ tournamentId, phase: 'THEME' }),
-          credentials: 'include',
-        });
-      } else {
-        await fetch('/api/tournaments/advance-phase', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ tournamentId, targetStatus: 'VOTING_THEME' }),
-          credentials: 'include',
-        });
-        await fetch('/api/tournaments/start-voting', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ tournamentId, phase: 'ASSIGNMENT_METHOD' }),
-          credentials: 'include',
-        });
-        onProceedNext?.();
-      }
-    } catch (err: any) {
-      setError(err.message || 'Error al avanzar a la siguiente fase.');
-    } finally {
-      setIsAdvancingPhase(false);
-    }
-  }, [isAdvancingPhase, tournamentId, voteResult?.phase, onProceedNext]);
-
   // Explicit submit vote to server (Item 2)
   const handleConfirmVote = useCallback(
     async (choice: string) => {
@@ -327,7 +350,7 @@ export function VotingView({
     <div className="mx-auto max-w-4xl px-4 py-4 space-y-6">
       {/* HUD Header & Countdown Panel (RF-99, RF-100) */}
       <Panel
-        title={phase === 'FORMAT' ? 'Votación de Formato' : 'Votación de Temática'}
+        title={phase === 'FORMAT' ? 'Votación de Formato (Paso 1 de 3)' : 'Votación de Temática (Paso 2 de 3)'}
         subtitle={isConnected ? 'Sincronizado' : 'Sin conexión'}
       >
         <div className="space-y-4">
@@ -338,7 +361,7 @@ export function VotingView({
                 Votación en Vivo (60 Segundos)
               </span>
               <h2 className="font-display text-2xl font-black text-foreground">
-                Elegí el Formato del Torneo
+                {phase === 'FORMAT' ? 'Elegí el Formato del Torneo' : 'Elegí la Temática de Equipos'}
               </h2>
             </div>
 
@@ -400,105 +423,136 @@ export function VotingView({
 
       {/* Result Card when Voting Concludes (RF-100, RF-101) */}
       {voteResult && (
-        <Panel title="Resultado de la Votación" subtitle="Definición Oficial">
+        <Panel
+          title={voteResult.phase === 'FORMAT' ? 'Resultado: Formato Electo' : '¡Temática Electa para la Juntada!'}
+          subtitle="Definición Oficial"
+        >
           <div className="space-y-5 text-center py-2">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/20 border border-primary glow-green">
-              <Trophy className="h-8 w-8 text-primary" />
-            </div>
+            {isRouletteActive ? (
+              <div className="py-8 px-4 flex flex-col items-center justify-center space-y-4 rounded-2xl border-2 border-accent/80 bg-accent/10 glow-orange animate-pulse">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-accent/20 border-2 border-accent text-accent">
+                  <Dices className="h-8 w-8 animate-spin" />
+                </div>
+                <div className="space-y-1.5 text-center">
+                  <span className="text-xs font-bold uppercase tracking-widest text-accent font-mono">
+                    🎲 {voteResult.wasDraw ? '¡Desempate en Vivo por Ruleta!' : '¡Sorteo Automático al Azar!'}
+                  </span>
+                  <h3 className="font-display text-2xl sm:text-3xl font-black text-foreground uppercase tracking-wider">
+                    {FORMAT_METADATA[rouletteOption.toLowerCase()]?.title || rouletteOption}
+                  </h3>
+                </div>
+                <p className="text-xs text-muted-foreground font-mono">
+                  {voteResult.phase === 'FORMAT' ? 'Sorteando entre formatos disponibles...' : 'Sorteando entre temáticas disponibles...'}
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/20 border border-primary glow-green">
+                  <Trophy className="h-8 w-8 text-primary" />
+                </div>
 
-            <div className="space-y-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground font-mono">
-                {voteResult.phase === 'FORMAT' ? 'Formato Electo para la Juntada' : 'Temática Electa para la Juntada'}
-              </span>
-              <h3 className="font-display text-2xl sm:text-3xl font-black text-foreground text-glow uppercase">
-                {voteResult.phase === 'FORMAT' ? formatWinnerName : (FORMAT_METADATA[voteResult.winner.toLowerCase()]?.title || voteResult.winner)}
-              </h3>
-              {voteResult.phase === 'FORMAT' && voteResult.matchFormat && (
-                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-secondary/80 border border-border text-xs font-semibold text-foreground mt-2">
-                  {voteResult.matchFormat === 'TWO_LEGGED' ? (
-                    <>
-                      <span className="text-accent text-sm">🔄</span>
-                      <span className="text-accent font-bold">Modalidad: Ida y Vuelta (Series de 2)</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-primary text-sm">⚽</span>
-                      <span className="text-primary font-bold">Modalidad: Partido Único (90 min)</span>
-                    </>
+                <div className="space-y-1.5">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground font-mono">
+                    {voteResult.phase === 'FORMAT' ? 'Formato Electo para la Juntada' : '¡Temática Electa para la Juntada!'}
+                  </span>
+                  <h3 className="font-display text-2xl sm:text-3xl font-black text-foreground text-glow uppercase">
+                    {voteResult.phase === 'FORMAT' ? formatWinnerName : (FORMAT_METADATA[voteResult.winner.toLowerCase()]?.title || voteResult.winner)}
+                  </h3>
+                  {voteResult.phase === 'FORMAT' && voteResult.matchFormat && (
+                    <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-secondary/80 border border-border text-xs font-semibold text-foreground mt-2">
+                      {voteResult.matchFormat === 'TWO_LEGGED' ? (
+                        <>
+                          <span className="text-accent text-sm">🔄</span>
+                          <span className="text-accent font-bold">Modalidad: Ida y Vuelta (Series de 2)</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-primary text-sm">⚽</span>
+                          <span className="text-primary font-bold">Modalidad: Partido Único (90 min)</span>
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
-            </div>
 
-            {/* Tie-break Alert (RF-101) */}
-            {voteResult.wasDraw && (
-              <div className="max-w-md mx-auto flex items-center gap-2.5 rounded-md bg-accent/15 border border-accent/40 p-3 text-left text-xs text-accent">
-                <Dices className="h-5 w-5 shrink-0 text-accent animate-spin" />
-                <div>
-                  <p className="font-bold">¡Desempate al Azar (RF-101)!</p>
-                  <p className="text-[11px] text-foreground/80">
-                    Hubo empate entre las opciones más votadas (
-                    {voteResult.tiedOptions
-                      ?.map((opt) => FORMAT_METADATA[opt.toLowerCase()]?.title || opt)
-                      .join(' y ')}
-                    ). El sistema desempató automáticamente al azar con distribución uniforme.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Vote Breakdown */}
-            <div className="max-w-md mx-auto space-y-1.5 pt-2">
-              <p className="text-xs uppercase tracking-wider text-muted-foreground font-bold text-left">
-                Desglose de Votos:
-              </p>
-              <div className="space-y-1 text-xs">
-                {Object.entries(voteResult.voteCounts).map(([optKey, votes]) => (
-                  <div
-                    key={optKey}
-                    className={`flex items-center justify-between p-2 rounded border ${
-                      optKey.toLowerCase() === voteResult.winner.toLowerCase()
-                        ? 'border-primary/80 bg-primary/10 font-bold text-primary'
-                        : 'border-border/60 bg-secondary/30 text-muted-foreground'
-                    }`}
-                  >
-                    <span>{FORMAT_METADATA[optKey.toLowerCase()]?.title || optKey}</span>
-                    <span className="font-mono">{votes} voto{votes === 1 ? '' : 's'}</span>
+                {/* Tie-break Alert (RF-101) */}
+                {voteResult.wasDraw && (
+                  <div className="max-w-md mx-auto flex items-center gap-2.5 rounded-md bg-accent/15 border border-accent/40 p-3 text-left text-xs text-accent">
+                    <Dices className="h-5 w-5 shrink-0 text-accent animate-spin" />
+                    <div>
+                      <p className="font-bold">¡Desempate al Azar (RF-101)!</p>
+                      <p className="text-[11px] text-foreground/80">
+                        Hubo empate entre las opciones más votadas (
+                        {voteResult.tiedOptions
+                          ?.map((opt) => FORMAT_METADATA[opt.toLowerCase()]?.title || opt)
+                          .join(' y ')}
+                        ). El sistema desempató automáticamente al azar con distribución uniforme.
+                      </p>
+                    </div>
                   </div>
-                ))}
-              </div>
-            </div>
+                )}
 
-            {/* Advance Control (T32: Autonomía total de participantes) */}
-            <div className="pt-4 flex flex-col items-center justify-center gap-2">
-              <p className="text-xs text-primary font-mono animate-pulse">
-                {voteResult.phase === 'FORMAT'
-                  ? '⏳ Pasando automáticamente a la Votación de Temática en 4 segundos...'
-                  : '⏳ Pasando automáticamente a la Votación de Asignación en 4 segundos...'}
-              </p>
-              <PrimaryButton
-                type="button"
-                disabled={isAdvancingPhase}
-                onClick={handleAdvancePhase}
-                className="w-full sm:w-auto px-8 glow-green font-bold uppercase tracking-wider text-sm py-2.5"
-              >
-                <span>
-                  {isAdvancingPhase
-                    ? 'Avanzando...'
-                    : voteResult.phase === 'FORMAT'
-                    ? 'Continuar a Temática'
-                    : 'Continuar a Asignación'}
-                </span>
-                <ArrowRight className="h-4 w-4 ml-1.5" />
-              </PrimaryButton>
-            </div>
+                {/* Vote Breakdown (Filtered votes > 0, clean message for 0 total votes) */}
+                <div className="max-w-md mx-auto space-y-1.5 pt-2">
+                  <p className="text-xs uppercase tracking-wider text-muted-foreground font-bold text-left">
+                    Desglose de Votos:
+                  </p>
+                  {(() => {
+                    const validVoteEntries = Object.entries(voteResult.voteCounts || {}).filter(
+                      ([_, count]) => count > 0
+                    );
+                    const totalVotes = Object.values(voteResult.voteCounts || {}).reduce((a, b) => a + b, 0);
+
+                    if (totalVotes === 0 || validVoteEntries.length === 0) {
+                      return (
+                        <div className="p-3 rounded-lg border border-border/70 bg-secondary/40 text-center text-xs font-medium text-muted-foreground">
+                          Sin votos emitidos — Definido por sorteo automático al azar
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-1 text-xs">
+                        {validVoteEntries.map(([optKey, votes]) => (
+                          <div
+                            key={optKey}
+                            className={`flex items-center justify-between p-2 rounded border ${
+                              optKey.toLowerCase() === voteResult.winner.toLowerCase()
+                                ? 'border-primary/80 bg-primary/10 font-bold text-primary'
+                                : 'border-border/60 bg-secondary/30 text-muted-foreground'
+                            }`}
+                          >
+                            <span>{FORMAT_METADATA[optKey.toLowerCase()]?.title || optKey}</span>
+                            <span className="font-mono">{votes} voto{votes === 1 ? '' : 's'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Advance Notice (RF-99, RF-100, T42) */}
+                <div className="pt-4 flex flex-col items-center justify-center gap-2">
+                  <div className="flex items-center gap-2.5 text-xs text-primary font-mono bg-primary/10 border border-primary/30 px-5 py-2.5 rounded-full animate-pulse">
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-primary"></span>
+                    </span>
+                    <span className="font-semibold tracking-wide">Avanzando automáticamente a la siguiente etapa...</span>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </Panel>
       )}
 
       {/* Options Selection Grid (RF-99: Filtered by N confirmed players) */}
       {!voteResult && (
-        <Panel title="Opciones Disponibles" subtitle={`${options.length} formatos válidos`}>
+        <Panel
+          title="Opciones Disponibles"
+          subtitle={phase === 'FORMAT' ? `${options.length} formatos válidos` : `${options.length} temáticas disponibles`}
+        >
           {isOffline && (
             <div className="rounded border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-300 text-center mb-3">
               Votación pausada: sin conexión con el servidor. Se reactivará al reconectar.

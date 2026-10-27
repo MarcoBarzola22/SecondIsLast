@@ -34,7 +34,7 @@ export default function App() {
   // Derive initial active view from persistent tournament phase (RF-40) - default is always 'lobby' (T29)
   const [view, setView] = useState<ViewType>(() => {
     if (activeTournament) {
-      if (activeTournament.phase === 'theme') return 'tematica';
+      if (activeTournament.phase === 'theme') return 'equipos';
       if (activeTournament.phase === 'draft') return 'draft';
       if (activeTournament.phase === 'bracket') return 'bracket';
       if (activeTournament.phase === 'league') return 'league';
@@ -62,7 +62,18 @@ export default function App() {
     const status = tourney.status;
     if (status === 'LOBBY') return 'lobby';
     if (status === 'VOTING_FORMAT') return 'votacion';
-    if (status === 'VOTING_THEME') return 'equipos';
+    if (status === 'VOTING_THEME') {
+      const vs = (tourney as any).votingSession;
+      const hasAssignmentMethod = Boolean((tourney as any).settings?.assignmentMethod);
+      const isAssignmentPhase =
+        vs?.phase === 'ASSIGNMENT_METHOD' ||
+        hasAssignmentMethod ||
+        Boolean((tourney as any).drawSession);
+      if (isAssignmentPhase) {
+        return 'equipos';
+      }
+      return 'votacion';
+    }
     if (status === 'IN_PROGRESS') {
       const format = (tourney.format || tourney.tournamentType || '').toLowerCase();
       if (format === 'league' || format === 'league_playoffs') return 'league';
@@ -72,7 +83,7 @@ export default function App() {
     }
 
     if (activeTournament) {
-      if (activeTournament.phase === 'theme') return 'tematica';
+      if (activeTournament.phase === 'theme') return 'equipos';
       if (activeTournament.phase === 'draft') return 'draft';
       if (activeTournament.phase === 'bracket') return 'bracket';
       if (activeTournament.phase === 'league') return 'league';
@@ -148,13 +159,20 @@ export default function App() {
               });
             }
           } else if (status === 'VOTING_THEME') {
-            const hasDraftSession = Boolean(data.tournament.draftSession);
             const vs = data.tournament.votingSession || data.votingSession;
+            const hasAssignmentMethod = Boolean(data.tournament.settings?.assignmentMethod);
+            const isAssignmentPhase =
+              vs?.phase === 'ASSIGNMENT_METHOD' ||
+              hasAssignmentMethod ||
+              Boolean(data.tournament.drawSession);
+
             setView((curr) => {
               if (curr === 'tabla' || curr === 'reglamento') return curr;
-              if (hasDraftSession || curr === 'draft') return 'draft';
-              if (!vs || vs.phase === 'THEME' || vs.phase === 'FORMAT') return 'votacion';
-              return 'equipos';
+              if (curr === 'draft') return 'draft';
+              if (isAssignmentPhase) {
+                return 'equipos';
+              }
+              return 'votacion';
             });
           } else if (status === 'IN_PROGRESS') {
             const format = (data.tournament.format || '').toLowerCase();
@@ -198,7 +216,11 @@ export default function App() {
       if (payload?.status === 'VOTING_FORMAT') {
         setView('votacion');
       } else if (payload?.status === 'VOTING_THEME') {
-        setView((curr) => (curr === 'votacion' ? 'votacion' : 'equipos'));
+        setView((curr) => {
+          if (curr === 'tabla' || curr === 'reglamento') return curr;
+          if (curr === 'draft') return 'draft';
+          return 'votacion';
+        });
       } else if (payload?.status === 'DRAFT') {
         setView('draft');
       }
@@ -218,17 +240,29 @@ export default function App() {
         setView('votacion');
       } else if (payload?.phase === 'ASSIGNMENT_METHOD') {
         setView('equipos');
+        if (isOnline) {
+          rehydrateActiveTournament();
+        }
       }
     };
 
-    const handleVoteEnded = async () => {
+    const handleVoteEnded = async (payload?: any) => {
+      if (payload?.phase === 'FORMAT' || payload?.phase === 'THEME') {
+        setView('votacion');
+        // Do NOT rehydrate immediately during FORMAT or THEME result display!
+        // This ensures VotingView.tsx stays mounted without any flicker or premature DB state transition.
+        return;
+      }
       if (isOnline) {
         await rehydrateActiveTournament();
       }
     };
 
     const handleDraftTurnUpdated = async () => {
-      setView('draft');
+      setView((curr) => {
+        if (curr === 'equipos') return 'equipos';
+        return 'draft';
+      });
       if (isOnline) {
         await rehydrateActiveTournament();
       }
@@ -486,13 +520,13 @@ export default function App() {
               else if (format === 'league' || format === 'league_playoffs') setView('league');
               else if (format === 'group_stage') setView('group_stage');
               else if (format === 'double_elimination') setView('double_elimination');
-              else setView('draft');
+              else setView('bracket');
             }}
           />
         )}
 
         {view === 'registro' && (
-          <RegistrationView onProceedToTheme={() => setView('tematica')} />
+          <RegistrationView onProceedToTheme={() => setView('equipos')} />
         )}
 
         {view === 'tematica' && (

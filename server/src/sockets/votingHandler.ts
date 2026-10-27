@@ -250,8 +250,14 @@ export async function closeVotingSession(
       },
     });
 
-    // Auto-advance to phase THEME after 4 seconds (RF-99, RF-100)
+    // Auto-advance to phase THEME after 8.5s (if draw/random) or 5.5s (if direct winner) (T42)
     if (io) {
+      const isTieOrRandomOrZero =
+        result.wasDraw ||
+        result.winner.toLowerCase() === 'random' ||
+        Object.values(result.voteCounts || {}).reduce((a, b) => a + b, 0) === 0;
+      const waitTime = isTieOrRandomOrZero ? 8500 : 5500;
+
       setTimeout(async () => {
         try {
           await prisma.tournament.update({
@@ -271,14 +277,30 @@ export async function closeVotingSession(
         } catch (err) {
           console.error('[VotingHandler] Error starting THEME voting session after FORMAT:', err);
         }
-      }, 4000);
+      }, waitTime);
     }
   } else if (session.phase === 'THEME') {
     let resolvedTheme = result.winner;
     const availableThemes = tournamentService.getAllAvailableThemeNames();
-    if (resolvedTheme.toLowerCase() === 'random') {
-      const randIdx = Math.floor(Math.random() * availableThemes.length);
-      resolvedTheme = availableThemes[randIdx] || 'Clásicos PES 6';
+    const validThemeOptions = session.options.filter((o) => o.toLowerCase() !== 'random');
+    const fallbackThemes = validThemeOptions.length > 0 ? validThemeOptions : availableThemes;
+
+    const totalVotes = Object.values(result.voteCounts || {}).reduce((a, b) => a + b, 0);
+    const isTieOrRandomOrZero =
+      result.wasDraw ||
+      result.winner.toLowerCase() === 'random' ||
+      totalVotes === 0;
+
+    let themeTiedOptions = (result.tiedOptions && result.tiedOptions.length > 0)
+      ? result.tiedOptions.filter((o) => o.toLowerCase() !== 'random')
+      : fallbackThemes;
+
+    if (isTieOrRandomOrZero) {
+      const candidates = themeTiedOptions.length > 0 ? themeTiedOptions : fallbackThemes;
+      if (resolvedTheme.toLowerCase() === 'random' || totalVotes === 0) {
+        const randIdx = Math.floor(Math.random() * candidates.length);
+        resolvedTheme = candidates[randIdx] || 'Clásicos PES 6';
+      }
     }
     resolvedWinner = resolvedTheme;
 
@@ -290,8 +312,10 @@ export async function closeVotingSession(
       },
     });
 
-    // Auto-advance to phase ASSIGNMENT_METHOD after 4 seconds (RF-99, RF-100)
+    // Auto-advance to phase ASSIGNMENT_METHOD after 8.5s (if draw/random) or 5.5s (if direct winner) (T42)
     if (io) {
+      const waitTime = isTieOrRandomOrZero ? 8500 : 5500;
+
       setTimeout(async () => {
         try {
           startVotingSession(
@@ -314,7 +338,7 @@ export async function closeVotingSession(
         } catch (err) {
           console.error('[VotingHandler] Error starting ASSIGNMENT_METHOD voting session after THEME:', err);
         }
-      }, 4000);
+      }, waitTime);
     }
   } else if (session.phase === 'ASSIGNMENT_METHOD') {
     let resolvedMethod = result.winner;
@@ -342,6 +366,11 @@ export async function closeVotingSession(
     });
 
     if (io) {
+      const isTieOrZero =
+        result.wasDraw ||
+        Object.values(result.voteCounts || {}).reduce((a, b) => a + b, 0) === 0;
+      const waitTime = isTieOrZero ? 8500 : 5500;
+
       setTimeout(async () => {
         try {
           const method = resolvedMethod.toUpperCase() === 'DRAFT_ORDER' ? 'DRAFT_ORDER' : 'DIRECT_DRAW';
@@ -350,13 +379,13 @@ export async function closeVotingSession(
             io,
             tournamentId,
             undefined,
-            1200,
+            1800,
             method as any
           );
         } catch (err) {
           console.error('[VotingHandler] Error auto-triggering draw after assignment vote:', err);
         }
-      }, 3000);
+      }, waitTime);
     }
   }
 
@@ -364,12 +393,39 @@ export async function closeVotingSession(
   activeVotingSessions.delete(tournamentId);
 
   // 5. Broadcast vote:ended event across room and globally
+  let wasDraw = result.wasDraw;
+  let tiedOptions = result.tiedOptions;
+
+  if (session.phase === 'THEME') {
+    const totalVotes = Object.values(result.voteCounts || {}).reduce((a, b) => a + b, 0);
+    if (result.wasDraw || result.winner.toLowerCase() === 'random' || totalVotes === 0) {
+      wasDraw = true;
+      const validThemeOptions = session.options.filter((o) => o.toLowerCase() !== 'random');
+      const fallbackThemes = validThemeOptions.length > 0 ? validThemeOptions : tournamentService.getAllAvailableThemeNames();
+      const candidates = (result.tiedOptions && result.tiedOptions.length > 0)
+        ? result.tiedOptions.filter((o) => o.toLowerCase() !== 'random')
+        : fallbackThemes;
+      tiedOptions = candidates.length > 0 ? candidates : fallbackThemes;
+    }
+  } else if (session.phase === 'FORMAT') {
+    const totalVotes = Object.values(result.voteCounts || {}).reduce((a, b) => a + b, 0);
+    if (result.wasDraw || result.winner.toLowerCase() === 'random' || totalVotes === 0) {
+      wasDraw = true;
+      const validOptions = session.options.filter((o) => o.toLowerCase() !== 'random');
+      const fallbackOptions = validOptions.length > 0 ? validOptions : ['bracket', 'league', 'double_elimination'];
+      const candidates = (result.tiedOptions && result.tiedOptions.length > 0)
+        ? result.tiedOptions.filter((o) => o.toLowerCase() !== 'random')
+        : fallbackOptions;
+      tiedOptions = candidates.length > 0 ? candidates : fallbackOptions;
+    }
+  }
+
   const payload: VoteEndedPayload = {
     phase: session.phase,
     winner: resolvedWinner,
     matchFormat: session.phase === 'FORMAT' ? (await prisma.tournament.findUnique({ where: { id: tournamentId } }))?.matchFormat || 'SINGLE_MATCH' : undefined,
-    wasDraw: result.wasDraw,
-    tiedOptions: result.tiedOptions,
+    wasDraw,
+    tiedOptions,
     voteCounts: result.voteCounts,
   };
 

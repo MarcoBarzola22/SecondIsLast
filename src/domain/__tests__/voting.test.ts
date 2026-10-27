@@ -349,4 +349,49 @@ describe('voting domain logic', () => {
       expect(MATCH_FORMAT_OPTIONS).toContain('TWO_LEGGED');
     });
   });
+
+  describe('ASSIGNMENT_METHOD case-insensitive voting and ties (T41)', () => {
+    const validAssignmentOptions = ['DIRECT_DRAW', 'DRAFT_ORDER'] as const;
+
+    it('matches lowercase choices case-insensitively and returns canonical uppercase winner', () => {
+      const votes = [
+        { participantId: 'p1', choice: 'direct_draw' },
+        { participantId: 'p2', choice: 'direct_draw' },
+        { participantId: 'p3', choice: 'draft_order' },
+      ];
+      const result = computeVoteResults(votes as any, validAssignmentOptions);
+      expect(result.winner).toBe('DIRECT_DRAW');
+      expect(result.wasDraw).toBe(false);
+      expect(result.voteCounts.DIRECT_DRAW).toBe(2);
+      expect(result.voteCounts.DRAFT_ORDER).toBe(1);
+      expect(result.totalValidVotes).toBe(3);
+    });
+
+    it('breaks ties uniformly between DIRECT_DRAW and DRAFT_ORDER with wasDraw: true and tiedOptions', () => {
+      const tiedVotes = [
+        { participantId: 'p1', choice: 'direct_draw' },
+        { participantId: 'p2', choice: 'draft_order' },
+      ];
+      const result1 = computeVoteResults(tiedVotes as any, validAssignmentOptions, () => 0.1);
+      expect(result1.winner).toBe('DIRECT_DRAW');
+      expect(result1.wasDraw).toBe(true);
+      expect(result1.tiedOptions).toEqual(['DIRECT_DRAW', 'DRAFT_ORDER']);
+
+      const result2 = computeVoteResults(tiedVotes as any, validAssignmentOptions, () => 0.9);
+      expect(result2.winner).toBe('DRAFT_ORDER');
+      expect(result2.wasDraw).toBe(true);
+      expect(result2.tiedOptions).toEqual(['DIRECT_DRAW', 'DRAFT_ORDER']);
+    });
+
+    it('handles 0 votes (nobody voted) with wasDraw: true and uniform random selection', () => {
+      const result0 = computeVoteResults([], validAssignmentOptions, () => 0.8);
+      expect(result0.winner).toBe('DRAFT_ORDER');
+      expect(result0.wasDraw).toBe(true);
+      expect(result0.tiedOptions).toEqual(['DIRECT_DRAW', 'DRAFT_ORDER']);
+      expect(result0.totalValidVotes).toBe(0);
+      expect(result0.voteCounts.DIRECT_DRAW).toBe(0);
+      expect(result0.voteCounts.DRAFT_ORDER).toBe(0);
+    });
+  });
 });
+

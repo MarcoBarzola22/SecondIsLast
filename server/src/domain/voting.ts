@@ -87,6 +87,12 @@ export function computeVoteResults<T extends string = string>(
     throw new Error('validOptions must contain at least one option');
   }
 
+  // Canonical map: lowercased option -> canonical option as typed in validOptions
+  const canonicalMap = new Map<string, T>();
+  for (const opt of validOptions) {
+    canonicalMap.set(opt.toLowerCase(), opt);
+  }
+
   const voteCounts = {} as Record<T, number>;
   for (const opt of validOptions) {
     voteCounts[opt] = 0;
@@ -101,13 +107,16 @@ export function computeVoteResults<T extends string = string>(
     for (const item of votes) {
       if (typeof item === 'object' && item !== null && 'choice' in item) {
         const entry = item as VoteEntry<T>;
+        const rawChoice = String(entry.choice);
+        const canonicalChoice = canonicalMap.get(rawChoice.toLowerCase()) ?? (entry.choice as T);
         if (entry.participantId) {
-          latestVotesByParticipant.set(entry.participantId, entry.choice);
+          latestVotesByParticipant.set(entry.participantId, canonicalChoice);
         } else {
-          anonymousVotes.push(entry.choice);
+          anonymousVotes.push(canonicalChoice);
         }
       } else if (typeof item === 'string') {
-        anonymousVotes.push(item as T);
+        const canonicalChoice = canonicalMap.get(item.toLowerCase()) ?? (item as T);
+        anonymousVotes.push(canonicalChoice);
       }
     }
 
@@ -116,15 +125,18 @@ export function computeVoteResults<T extends string = string>(
       ...anonymousVotes,
     ];
   } else if (typeof votes === 'object' && votes !== null) {
-    effectiveChoices = Object.values(votes) as T[];
+    effectiveChoices = Object.values(votes).map((v) => {
+      const raw = String(v);
+      return canonicalMap.get(raw.toLowerCase()) ?? (v as T);
+    });
   }
 
   let totalValidVotes = 0;
-  const validSet = new Set(validOptions);
 
   for (const choice of effectiveChoices) {
-    if (validSet.has(choice)) {
-      voteCounts[choice] = (voteCounts[choice] || 0) + 1;
+    const canonical = canonicalMap.get(String(choice).toLowerCase());
+    if (canonical !== undefined) {
+      voteCounts[canonical] = (voteCounts[canonical] || 0) + 1;
       totalValidVotes++;
     }
   }

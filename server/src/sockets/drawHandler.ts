@@ -54,7 +54,7 @@ export function startDrawAnimation(
   tournamentId: string,
   plan: DrawPlan,
   onComplete?: () => Promise<void> | void,
-  intervalMs: number = 1200
+  intervalMs: number = 1800
 ): ActiveDrawSession {
   // Clear any existing session for this tournament
   const existing = activeDrawSessions.get(tournamentId);

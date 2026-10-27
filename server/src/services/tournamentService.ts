@@ -906,7 +906,7 @@ export class TournamentService {
     io: AppSocketServer | null,
     tournamentId?: string,
     customTeams?: string[],
-    intervalMs: number = 1200,
+    intervalMs: number = 1800,
     assignmentMethod: 'DIRECT_DRAW' | 'DRAFT_ORDER' = 'DIRECT_DRAW'
   ) {
     if (user) {
@@ -1006,11 +1006,14 @@ export class TournamentService {
           data: { teamName: team },
         });
       }
-      try {
-        await this.generateRelationalFixture(tournament.id, io);
-      } catch (err) {
-        console.error('[TournamentService] Error generating fixture after draw:', err);
-      }
+      // Wait 7000ms for clients to view the "¡Equipos Sorteados!" panel before generating fixture (RF-104, T42)
+      setTimeout(async () => {
+        try {
+          await this.generateRelationalFixture(tournament.id, io);
+        } catch (err) {
+          console.error('[TournamentService] Error generating fixture after draw:', err);
+        }
+      }, 7000);
     };
 
     const session = startDrawAnimation(io, tournament.id, plan, onComplete, intervalMs);

@@ -229,4 +229,45 @@
   - Cubre: RF-99, RF-100, RF-101, RF-103, RF-104.  
   - Hecho cuando: `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites completas de frontend (382 tests) y server (145 tests) pasan 100% en verde.
 
+- [x] **T41 · Hotfix Desglose sin 0 Votos, Ruleta de Desempate y Sorteo Directo vs Draft**  
+  1. **Filtrado de opciones no votadas y Ruleta en Desempate (`VotingView.tsx` y `TeamsPreviewView.tsx`):**  
+     - En el bloque "Desglose de Votos", filtrado para mostrar únicamente opciones con `votes > 0`. Si nadie vota (`0 votos totales`), visualización limpia: `"Sin votos emitidos — Definido por sorteo automático al azar"`.  
+     - Animación interactiva de ruleta de desempate en vivo durante 2.5 segundos (ciclando cada 120ms entre las opciones empatadas o disponibles) cuando `wasDraw === true`, gana la opción `'random'` o nadie vota, revelando la opción ganadora recién al finalizar los 2.5s.  
+  2. **Reparación de la 3ra Votación (`ASSIGNMENT_METHOD`: Sorteo Directo vs Orden de Draft) y su Animación:**  
+     - Comparación 100% case-insensitive en `computeVoteResults` (`src/domain/voting.ts` y `server/src/domain/voting.ts`), devolviendo siempre la clave canónica en mayúsculas (`'DIRECT_DRAW'` o `'DRAFT_ORDER'`). Ante 0 votos o empate, selección aleatoria uniforme (50%/50%) con `wasDraw: true` y `tiedOptions: ['DIRECT_DRAW', 'DRAFT_ORDER']`.  
+     - Un solo disparador del sorteo por parte del servidor (`votingHandler.ts`), eliminando invocaciones redundantes y prematuras en cliente `TeamsPreviewView.tsx`.  
+     - En `App.tsx`, prohibido navegar a `'tematica'` y protección estricta para permanecer en `'equipos'` (`TeamsPreviewView.tsx`) durante `status === 'VOTING_THEME'` y la animación `draw:animated`. Navegación a `'draft'` permitida única y exclusivamente cuando el método ganador fue `'DRAFT_ORDER'` y finalizó la animación de turnos (`isFinal: true`).  
+     - Flujo visual según método: `DIRECT_DRAW` muestra animación de 1200ms por jugador y panel `"¡Equipos Sorteados!"` durante 4 segundos (espera de 4000ms en `onComplete` de `tournamentService.ts` antes de `generateRelationalFixture`) avanzando directo a fixture; `DRAFT_ORDER` muestra animación de orden de turnos, tabla de orden durante 3 segundos y transición automática a `DraftView.tsx`.  
+  - Cubre: RF-99, RF-100, RF-101, RF-103, RF-104.  
+- [x] **T42 · Hotfix Unificado: Eliminación de Parpadeo en Transición a Temática, Ruletas de Desempate 3.5s con Desaceleración, Carteles de Ganador 5s/5.5s y Sorteos Pausados (1.8s)**  
+  1. **Eliminación del parpadeo de `TeamsPreviewView` antes de Votación de Temática (`App.tsx`, `votingHandler.ts`, `VotingView.tsx`):**  
+     - En `App.tsx` (`handleVoteStarted`, `rehydrateActiveTournament`, `getActiveTournamentView`, `handleTournamentStatus`), mantenimiento estricto de la vista en `'votacion'` (`VotingView.tsx`) durante `phase === 'FORMAT'` y `phase === 'THEME'` mientras `!tournament.theme`. Transición a `'equipos'` (`TeamsPreviewView.tsx`) únicamente cuando `tournament.theme` ya está definido y arranca la fase `ASSIGNMENT_METHOD`.  
+     - En `VotingView.tsx`, títulos dinámicos con indicador de pasos: "Votación de Formato (Paso 1 de 3)" vs "Votación de Temática (Paso 2 de 3)", selector de modalidad (Partido Único / Ida y Vuelta) visible solo en `FORMAT`, eliminación del botón manual "Continuar a Equipos" y reemplazo por indicador visual sutil con cuenta/pulso `"Avanzando automáticamente a la siguiente etapa..."`.  
+  2. **Ruleta de Desempate + Cartel del Ganador en Votación de Temática (`VotingView.tsx`, `votingHandler.ts`):**  
+     - Todos los clientes permanecen en `VotingView.tsx` al terminar `THEME`. Si hubo empate (`wasDraw === true`), 0 votos o ganó `'random'`: animación interactiva de ruleta de desempate en vivo durante 3.5 segundos ciclando entre temáticas cada 140ms desacelerando en los últimos 1100ms, seguida de 5.0 segundos fijos mostrando la tarjeta "¡Temática Electa: [Nombre]!" con desglose de votos (solo `votes > 0` o cartel limpio de desempate al azar). Total 8.5 segundos.  
+     - Si hubo ganador directo sin empate: 5.5 segundos fijos del cartel de ganador y desglose de votos.  
+  3. **Pausas Claras y Tiempos Cómodos en las 3 Votaciones (`votingHandler.ts`, `VotingView.tsx`, `TeamsPreviewView.tsx`):**  
+     - Ritmo sincronizado de 8500ms (en empate/random/0 votos: 3.5s ruleta + 5.0s cartel) o 5500ms (en ganador directo) en `FORMAT`, `THEME` y `ASSIGNMENT_METHOD`.  
+     - Indicador sutil de avance automático `"Avanzando automáticamente a la siguiente etapa..."` presente en las tarjetas de resultado de `VotingView.tsx` y `TeamsPreviewView.tsx`.  
+  4. **Ritmo Pausado en Sorteo de Equipos y Orden de Turnos (`drawHandler.ts`, `tournamentService.ts`, `TeamsPreviewView.tsx`):**  
+     - Cadencia de animación `draw:animated` incrementada a 1800ms (1.8 segundos) por paso para mayor suspenso en sorteos de equipos y turnos de draft.  
+     - `DIRECT_DRAW`: visualización del panel final "¡Equipos Sorteados!" durante 7 segundos completos (`7000ms` en `onComplete` de `tournamentService.ts` antes de `generateRelationalFixture`).  
+     - `DRAFT_ORDER`: visualización de la tabla del orden de turnos sorteado (`1º, 2º, 3º, 4º`) durante 6 segundos completos (`6000ms` en `TeamsPreviewView.tsx`) antes de transicionar a la vista `'draft'` (`DraftView.tsx`).  
+  - Cubre: RF-99, RF-100, RF-101, RF-103, RF-104.  
+- [x] **T43 · Hotfix Quirúrgico: Protección contra Desmontaje Prematuro de VotingView y Ruleta Real de Temática**  
+  1. **En `App.tsx` (`handleVoteEnded`, `handleVoteStarted`, `rehydrateActiveTournament`, `getActiveTournamentView`):**  
+     - En `handleVoteEnded`: si `payload?.phase === 'FORMAT'` o `payload?.phase === 'THEME'`, prohibido llamar a `rehydrateActiveTournament()`. La vista se conserva estrictamente en `'votacion'` para permitir la visualización ininterrumpida de la ruleta de desempate (3.5s) y el cartel de temática ganadora (5.0s).  
+     - En `rehydrateActiveTournament` y `getActiveTournamentView`: se eliminó el salto condicional basado en `Boolean(tournament.theme)`. Mientras el torneo esté en `VOTING_THEME`, la vista solo conmuta a `'equipos'` si `votingSession?.phase === 'ASSIGNMENT_METHOD'`, `tournament.settings.assignmentMethod` ya existe, o hay `drawSession` activa. En cualquier otro caso, permanece en `'votacion'`.  
+     - En `handleVoteStarted`: el cambio a `'equipos'` y la rehidratación solo se disparan cuando el servidor emite `payload.phase === 'ASSIGNMENT_METHOD'` tras finalizar el intervalo de espera en `votingHandler.ts`.  
+  2. **En `votingHandler.ts` (`closeVotingSession` en `THEME`):**  
+     - Resolución de temática ganadora real sorteando entre las opciones válidas (excluyendo `'random'`) cuando ganó `'random'` o hubo empate / 0 votos.  
+     - `VoteEndedPayload` emite en `winner` el nombre real de la temática sorteada, `wasDraw: true` y `tiedOptions` con el pool de temáticas candidatas.  
+  3. **En `VotingView.tsx`:**  
+     - Títulos dinámicos de resultado: "¡Temática Electa para la Juntada!" y visualización de la temática ganadora real con desglose de votos filtrado (`votes > 0`).  
+  - Cubre: RF-99, RF-100, RF-101, RF-103.  
+  - Hecho cuando: `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites completas de frontend (385 tests) y server (148 tests) pasan 100% en verde.
+
+
+
+
 

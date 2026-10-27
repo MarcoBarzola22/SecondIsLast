@@ -309,8 +309,8 @@ export function appReducer(state: AppData, action: Action): AppData {
     }
 
     case 'TEAM_ASSIGNED': {
-      if (!state.activeTournament || state.activeTournament.phase !== 'draft') {
-        console.warn('[Reducer] Cannot assign team outside draft phase.');
+      if (!state.activeTournament) {
+        console.warn('[Reducer] Cannot assign team without active tournament.');
         return state;
       }
 
@@ -327,9 +327,9 @@ export function appReducer(state: AppData, action: Action): AppData {
     }
 
     case 'TEAMS_BATCH_ASSIGNED': {
-      // RF-52: Batch assignment from automatic team draw
-      if (!state.activeTournament || state.activeTournament.phase !== 'draft') {
-        console.warn('[Reducer] Cannot batch assign teams outside draft phase.');
+      // RF-52: Batch assignment from automatic team draw (relaxed for T36)
+      if (!state.activeTournament) {
+        console.warn('[Reducer] Cannot batch assign teams without active tournament.');
         return state;
       }
 
@@ -1617,18 +1617,22 @@ export function buildActiveTournamentFromPayload(payload: any): ActiveTournament
     .map((p: any) => p.playerId || p.player?.id || p.id)
     .filter(Boolean);
 
-  const teams: Record<string, string> = {};
+  const teams: Record<string, string> = {
+    ...(payload.teams || {}),
+  };
   for (const p of participants) {
     const id = p.playerId || p.player?.id || p.id;
-    if (id) {
-      teams[id] = p.team || p.teamName || '';
+    if (id && (p.team || p.teamName)) {
+      teams[id] = p.team || p.teamName;
     }
   }
 
-  const draftOrder: string[] = [...participants]
-    .sort((a: any, b: any) => (a.seed ?? 999) - (b.seed ?? 999))
-    .map((p: any) => p.playerId || p.player?.id || p.id)
-    .filter(Boolean);
+  const draftOrder: string[] = Array.isArray(payload.draftOrder) && payload.draftOrder.length > 0
+    ? payload.draftOrder.map((item: any) => typeof item === 'string' ? item : (item.participantId || item.playerId || item.id))
+    : [...participants]
+        .sort((a: any, b: any) => (a.seed ?? 999) - (b.seed ?? 999))
+        .map((p: any) => p.playerId || p.player?.id || p.id)
+        .filter(Boolean);
 
   const rawMatches = Array.isArray(payload.matches) ? payload.matches : [];
 
@@ -1730,16 +1734,23 @@ export function buildActiveTournamentFromPayload(payload: any): ActiveTournament
 
   const series = Array.from(seriesMap.values());
 
-  const phase: TournamentPhase =
-    payload.status === 'VOTING_THEME'
-      ? 'theme'
-      : tournamentType === 'league'
-      ? 'league'
-      : tournamentType === 'group_stage'
-      ? 'group_stage'
-      : tournamentType === 'double_elimination'
-      ? 'double_elimination'
-      : 'bracket';
+  const rawStatus = (payload.status || payload.phase || '').toUpperCase();
+  let phase: TournamentPhase;
+  if (rawStatus === 'VOTING_THEME' || rawStatus === 'THEME') {
+    phase = 'theme';
+  } else if (rawStatus === 'DRAFT' || rawStatus === 'DRAFTING') {
+    phase = 'draft';
+  } else if (payload.phase && ['theme', 'draft', 'bracket', 'league', 'group_stage', 'double_elimination'].includes(payload.phase.toLowerCase())) {
+    phase = payload.phase.toLowerCase() as TournamentPhase;
+  } else if (tournamentType === 'league' || tournamentType === 'league_playoffs') {
+    phase = 'league';
+  } else if (tournamentType === 'group_stage') {
+    phase = 'group_stage';
+  } else if (tournamentType === 'double_elimination') {
+    phase = 'double_elimination';
+  } else {
+    phase = 'bracket';
+  }
 
   return {
     id: payload.id,

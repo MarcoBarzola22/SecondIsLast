@@ -304,14 +304,14 @@ router.delete('/lobby/participants/:id', requireAdmin, async (req: Request, res:
 
 /**
  * POST /api/tournaments/start-voting
- * Starts format voting with 120s countdown timer and emits vote:started (RF-96, RF-98, RF-99).
+ * Starts voting (FORMAT, THEME or ASSIGNMENT_METHOD) with countdown timer and emits vote:started (RF-96, RF-98, RF-99, T36).
  */
 router.post('/start-voting', async (req: Request, res: Response) => {
   try {
     const user = req.user!;
-    const { tournamentId } = req.body || {};
+    const { tournamentId, phase = 'FORMAT' } = req.body || {};
 
-    const result = await tournamentService.startFormatVoting(user, tournamentId);
+    const result = await tournamentService.startFormatVoting(user, tournamentId, phase);
     const io = getIO(req);
 
     cancelLobbyTimer(result.tournament.id);
@@ -326,7 +326,7 @@ router.post('/start-voting', async (req: Request, res: Response) => {
       60
     );
 
-    if (io) {
+    if (io && result.phase === 'FORMAT') {
       io.to(`tournament:${result.tournament.id}`).emit('tournament:status', {
         status: 'VOTING_FORMAT',
         tournamentId: result.tournament.id,
@@ -334,11 +334,18 @@ router.post('/start-voting', async (req: Request, res: Response) => {
     }
 
     res.status(200).json({
+      ok: true,
       tournament: result.tournament,
       phase: result.phase,
       options: result.options,
       expiresAt: session.expiresAt,
       totalVoters: result.totalVoters,
+      session: {
+        phase: session.phase,
+        options: session.options,
+        expiresAt: session.expiresAt,
+        totalVoters: session.totalVoters,
+      },
     });
   } catch (error: any) {
     if (error instanceof ForbiddenError || error.statusCode === 403) {
@@ -349,7 +356,7 @@ router.post('/start-voting', async (req: Request, res: Response) => {
       res.status(400).json({ error: error.message });
       return;
     }
-    res.status(500).json({ error: 'Error interno al iniciar la votación de formato.' });
+    res.status(500).json({ error: error.message || 'Error interno al iniciar la votación.' });
   }
 });
 
@@ -544,71 +551,7 @@ router.post('/close-voting', async (req: Request, res: Response) => {
   }
 });
 
-/**
- * POST /api/tournaments/start-voting
- * Initiates or returns an active 60s voting session (FORMAT, THEME or ASSIGNMENT_METHOD) (T33).
- */
-router.post('/start-voting', async (req: Request, res: Response) => {
-  try {
-    const { tournamentId, phase = 'ASSIGNMENT_METHOD' } = req.body || {};
-    let targetTourneyId = tournamentId;
-    if (!targetTourneyId) {
-      const active = await tournamentService.getActiveTournament();
-      targetTourneyId = active?.id;
-    }
 
-    if (!targetTourneyId) {
-      res.status(400).json({ error: 'No se encontró un torneo activo para iniciar votación.' });
-      return;
-    }
-
-    const io = getIO(req);
-    let session = getActiveVotingSession(targetTourneyId);
-    if (!session || session.closed || session.phase !== phase) {
-      const tourney = await prisma.tournament.findUnique({
-        where: { id: targetTourneyId },
-        include: {
-          participants: {
-            where: { isPresent: true },
-          },
-        },
-      });
-
-      if (!tourney) {
-        res.status(404).json({ error: 'Torneo no encontrado.' });
-        return;
-      }
-
-      const options =
-        phase === 'FORMAT'
-          ? getFormatVotingOptions(tourney.participants.length)
-          : phase === 'THEME'
-          ? ['clasicos', 'selecciones', 'champions', 'libertadores']
-          : ['DIRECT_DRAW', 'DRAFT_ORDER'];
-
-      session = startVotingSession(
-        io,
-        targetTourneyId,
-        phase,
-        options,
-        tourney.participants.length,
-        60
-      );
-    }
-
-    res.status(200).json({
-      ok: true,
-      session: {
-        phase: session.phase,
-        options: session.options,
-        expiresAt: session.expiresAt,
-        totalVoters: session.totalVoters,
-      },
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error al iniciar la sesión de votación.' });
-  }
-});
 
 /**
  * POST /api/tournaments/draft/pick

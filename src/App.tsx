@@ -190,8 +190,10 @@ export default function App() {
         setView('votacion');
       } else if (payload?.status === 'VOTING_THEME') {
         setView('equipos');
+      } else if (payload?.status === 'DRAFT') {
+        setView('draft');
       }
-      if (isOnline && user) {
+      if (isOnline) {
         await rehydrateActiveTournament();
       }
     };
@@ -211,7 +213,13 @@ export default function App() {
     };
 
     const handleVoteEnded = async () => {
-      if (isOnline && user) {
+      if (isOnline) {
+        await rehydrateActiveTournament();
+      }
+    };
+
+    const handleDraftTurnUpdated = async () => {
+      if (isOnline) {
         await rehydrateActiveTournament();
       }
     };
@@ -249,7 +257,7 @@ export default function App() {
         setView('bracket');
       }
 
-      if (isOnline && user) {
+      if (isOnline) {
         await rehydrateActiveTournament();
       }
     };
@@ -258,6 +266,7 @@ export default function App() {
     socket.on('tournament:abandoned', handleTournamentAbandoned);
     socket.on('vote:started', handleVoteStarted);
     socket.on('vote:ended', handleVoteEnded);
+    socket.on('draft:turn_updated', handleDraftTurnUpdated);
     socket.on('fixture:ready', handleFixtureReady);
 
     return () => {
@@ -265,6 +274,7 @@ export default function App() {
       socket.off('tournament:abandoned', handleTournamentAbandoned);
       socket.off('vote:started', handleVoteStarted);
       socket.off('vote:ended', handleVoteEnded);
+      socket.off('draft:turn_updated', handleDraftTurnUpdated);
       socket.off('fixture:ready', handleFixtureReady);
     };
   }, [socket, isOnline, user, cloudTournament?.format, rehydrateActiveTournament]);
@@ -286,78 +296,31 @@ export default function App() {
   useEffect(() => {
     if (!socket || !user) return;
 
-    const handleMatchSubmitted = async (payload: any) => {
-      let matchDetail = payload.match;
+    const handleMatchSubmitted = (payload: any) => {
+      const matchDetail = payload?.match || payload || {};
+      const matchId = payload?.matchId || matchDetail.id;
+      if (!matchId) return;
 
-      if (!matchDetail && payload.matchId) {
-        try {
-          const res = await fetch(`/api/matches/${payload.matchId}`, {
-            credentials: 'include',
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.match) {
-              matchDetail = data.match;
-            }
-          }
-        } catch {
-          // ignore network error
-        }
-      }
-
-      if (!matchDetail && payload.matchId) {
-        matchDetail = {
-          id: payload.matchId,
-          version: payload.version ?? 1,
-          homeScore: payload.homeScore ?? 0,
-          awayScore: payload.awayScore ?? 0,
-          penaltiesWinnerId: payload.penaltiesWinnerId,
-          homeParticipant: { playerId: payload.homePlayerId },
-          awayParticipant: { playerId: payload.awayPlayerId },
-        };
-      }
-
-      if (!matchDetail) return;
-
-      // Exhaustive cross-check to verify if the current user is the Away player (T34, T35)
-      let currentUser = user;
-      let effectiveUserPlayerId = currentUser.playerId || currentUser.player?.id;
-
-      if (!effectiveUserPlayerId) {
-        try {
-          const meRes = await fetch('/api/auth/me', { credentials: 'include' });
-          if (meRes.ok) {
-            const meData = await meRes.json();
-            if (meData?.user) {
-              currentUser = meData.user;
-              effectiveUserPlayerId = meData.user.playerId || meData.user.player?.id;
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      const awayParticipant = matchDetail.awayParticipant;
-      const awayPlayerId = payload.awayPlayerId || awayParticipant?.playerId || awayParticipant?.player?.id;
-      const awayEmail = (payload.awayEmail || awayParticipant?.player?.user?.email || '').toLowerCase().trim();
-      const userEmail = (currentUser.email || '').toLowerCase().trim();
+      const userPlayerId = user?.playerId || user?.player?.id;
+      const userEmail = (user?.email || '').toLowerCase().trim();
+      const awayPlayerId = payload.awayPlayerId || matchDetail.awayPlayerId || matchDetail.awayParticipant?.playerId || matchDetail.awayParticipant?.player?.id;
+      const awayParticipantId = matchDetail.awayParticipantId || matchDetail.awayParticipant?.id;
+      const awayEmail = (payload.awayEmail || matchDetail.awayParticipant?.player?.user?.email || '').toLowerCase().trim();
 
       // Check against tournament participants
       const tournamentParticipants = (cloudTournament?.participants || (activeTournament as any)?.participants || []) as any[];
       const userParticipant = tournamentParticipants.find(
         (p: any) =>
-          (effectiveUserPlayerId && (p.playerId === effectiveUserPlayerId || p.player?.id === effectiveUserPlayerId)) ||
+          (userPlayerId && (p.playerId === userPlayerId || p.player?.id === userPlayerId)) ||
           (userEmail && (p.player?.user?.email?.toLowerCase() === userEmail || p.email?.toLowerCase() === userEmail)) ||
-          (currentUser.id && (p.player?.userId === currentUser.id || p.userId === currentUser.id))
+          (user?.id && (p.player?.userId === user.id || p.userId === user.id))
       );
 
       const isAwayPlayer = Boolean(
-        (effectiveUserPlayerId && awayPlayerId && effectiveUserPlayerId === awayPlayerId) ||
+        (userPlayerId && awayPlayerId && userPlayerId === awayPlayerId) ||
+        (userParticipant && awayParticipantId && userParticipant.id === awayParticipantId) ||
         (userEmail && awayEmail && userEmail === awayEmail) ||
-        (currentUser.id && (awayParticipant?.player?.userId === currentUser.id || awayParticipant?.player?.user?.id === currentUser.id)) ||
-        (userParticipant && awayParticipant && userParticipant.id === awayParticipant.id) ||
-        (matchDetail.awayParticipantId && userParticipant?.id === matchDetail.awayParticipantId)
+        (user?.id && (matchDetail.awayParticipant?.player?.userId === user.id || matchDetail.awayParticipant?.userId === user.id))
       );
 
       if (isOnline) {
@@ -366,21 +329,21 @@ export default function App() {
 
       if (isAwayPlayer) {
         setLiveHandshakeMatch({
-          id: matchDetail.id,
+          id: matchId,
           round: matchDetail.round,
           leg: matchDetail.leg,
           seriesId: matchDetail.seriesId,
-          homePlayerId: matchDetail.homeParticipant?.playerId || payload.homePlayerId || '',
-          awayPlayerId: awayPlayerId || effectiveUserPlayerId || currentUser.id,
+          homePlayerId: matchDetail.homeParticipant?.playerId || matchDetail.homePlayerId || payload.homePlayerId || '',
+          awayPlayerId: awayPlayerId || userPlayerId || user?.id,
           homePlayerName: matchDetail.homeParticipant?.player
             ? `${matchDetail.homeParticipant.player.lastName}, ${matchDetail.homeParticipant.player.firstName}`
-            : (matchDetail.homeParticipant?.name || 'Local'),
+            : (matchDetail.homeParticipant?.name || matchDetail.homePlayerName || 'Local'),
           homeTeamName: matchDetail.homeTeamName || '',
           awayPlayerName: matchDetail.awayParticipant?.player
             ? `${matchDetail.awayParticipant.player.lastName}, ${matchDetail.awayParticipant.player.firstName}`
-            : currentUser.player
-              ? `${currentUser.player.lastName}, ${currentUser.player.firstName}`
-              : currentUser.name,
+            : user?.player
+              ? `${user.player.lastName}, ${user.player.firstName}`
+              : user?.name,
           awayTeamName: matchDetail.awayTeamName || '',
           homeScore: matchDetail.homeScore ?? payload.homeScore ?? 0,
           awayScore: matchDetail.awayScore ?? payload.awayScore ?? 0,
@@ -391,7 +354,7 @@ export default function App() {
           penaltiesWinnerId: matchDetail.penaltiesWinnerId ?? payload.penaltiesWinnerId ?? null,
           penaltiesWinnerName: matchDetail.penaltiesWinner?.player
             ? `${matchDetail.penaltiesWinner.player.lastName}, ${matchDetail.penaltiesWinner.player.firstName}`
-            : null,
+            : matchDetail.penaltiesWinnerName || null,
           version: matchDetail.version ?? payload.version ?? 1,
           status: 'PENDING_CONFIRMATION',
         });

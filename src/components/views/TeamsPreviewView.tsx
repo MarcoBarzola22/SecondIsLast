@@ -105,15 +105,15 @@ export function TeamsPreviewView({
         });
         if (res.ok && isMounted) {
           const data = await res.json();
-          if (data.session) {
-            setVotingExpiresAt(data.session.expiresAt);
-            setTotalVoters(data.session.totalVoters || participantCount);
-            if (data.session.closed || data.session.isClosed) {
+          const expires = data.expiresAt || data.session?.expiresAt;
+          if (typeof expires === 'string' && !isNaN(Date.parse(expires))) {
+            setVotingExpiresAt(expires);
+            setTotalVoters(data.totalVoters || data.session?.totalVoters || participantCount);
+            const isClosed = data.closed || data.session?.closed || data.session?.isClosed;
+            if (isClosed) {
               setHasVotingEnded(true);
-              if (data.session.winner) {
-                const winner = data.session.winner.toUpperCase() === 'DRAFT_ORDER' ? 'DRAFT_ORDER' : 'DIRECT_DRAW';
-                setAssignmentMethod(winner);
-              }
+              const winner = (data.winner || data.session?.winner || '').toUpperCase() === 'DRAFT_ORDER' ? 'DRAFT_ORDER' : 'DIRECT_DRAW';
+              setAssignmentMethod(winner);
             } else {
               setHasVotingEnded(false);
             }
@@ -244,7 +244,9 @@ export function TeamsPreviewView({
 
     const handleVoteStarted = (payload: any) => {
       if (payload.phase === 'ASSIGNMENT_METHOD') {
-        setVotingExpiresAt(payload.expiresAt);
+        if (typeof payload.expiresAt === 'string' && !isNaN(Date.parse(payload.expiresAt))) {
+          setVotingExpiresAt(payload.expiresAt);
+        }
         setTotalVoters(payload.totalVoters || participantCount);
         setVotesCast(0);
         setHasVotingEnded(false);
@@ -301,10 +303,11 @@ export function TeamsPreviewView({
     };
   }, [socket, tournamentId, participantCount, assignmentMethod, onProceedToFixture]);
 
-  // Auto-close fallback when timer expires (T33, T34, T35)
-  // ONLY triggers if votingExpiresAt is populated and timer actually reached 0
+  // Auto-close fallback when timer expires (T33, T34, T35, T36)
+  // ONLY triggers if votingExpiresAt is a valid date string and timer actually reached 0
   useEffect(() => {
-    if (Boolean(votingExpiresAt) && votingCountdown.isExpired && !hasVotingEnded && tournamentId) {
+    const isValidExpires = typeof votingExpiresAt === 'string' && !isNaN(Date.parse(votingExpiresAt));
+    if (isValidExpires && votingCountdown.isExpired && !hasVotingEnded && tournamentId) {
       fetch('/api/tournaments/close-voting', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -530,16 +530,22 @@ export class TournamentService {
    */
   async startFormatVoting(
     user: AuthUser,
-    tournamentId?: string
+    tournamentId?: string,
+    phase: 'FORMAT' | 'THEME' | 'ASSIGNMENT_METHOD' = 'FORMAT'
   ): Promise<{
     tournament: Tournament;
-    phase: 'FORMAT';
+    phase: 'FORMAT' | 'THEME' | 'ASSIGNMENT_METHOD';
     options: string[];
     totalVoters: number;
   }> {
+    const allowedStatuses =
+      phase === 'ASSIGNMENT_METHOD'
+        ? [TournamentStatus.VOTING_THEME, TournamentStatus.LOBBY, TournamentStatus.DRAFT]
+        : [TournamentStatus.LOBBY];
+
     const tournament = await this.prisma.tournament.findFirst({
       where: {
-        status: TournamentStatus.LOBBY,
+        status: { in: allowedStatuses },
         ...(tournamentId ? { id: tournamentId } : {}),
       },
       include: {
@@ -551,7 +557,11 @@ export class TournamentService {
     });
 
     if (!tournament) {
-      throw new BadRequestError('No hay ningún lobby disponible para iniciar votación.');
+      throw new BadRequestError(
+        phase === 'ASSIGNMENT_METHOD'
+          ? 'No hay ningún torneo disponible para iniciar votación de método.'
+          : 'No hay ningún lobby disponible para iniciar votación.'
+      );
     }
 
     const participants = tournament.participants;
@@ -575,18 +585,26 @@ export class TournamentService {
     }
 
     // Filter valid formats based strictly on N (RF-99), including explicit RANDOM option
-    const options = getFormatVotingOptions(count);
+    const options =
+      phase === 'ASSIGNMENT_METHOD'
+        ? ['DIRECT_DRAW', 'DRAFT_ORDER']
+        : phase === 'THEME'
+        ? ['clasicos', 'selecciones', 'champions', 'libertadores']
+        : getFormatVotingOptions(count);
 
-    const updatedTournament = await this.prisma.tournament.update({
-      where: { id: tournament.id },
-      data: {
-        status: TournamentStatus.VOTING_FORMAT,
-      },
-    });
+    let updatedTournament = tournament;
+    if (phase === 'FORMAT') {
+      updatedTournament = await this.prisma.tournament.update({
+        where: { id: tournament.id },
+        data: {
+          status: TournamentStatus.VOTING_FORMAT,
+        },
+      });
+    }
 
     return {
       tournament: updatedTournament,
-      phase: 'FORMAT',
+      phase,
       options,
       totalVoters: count,
     };

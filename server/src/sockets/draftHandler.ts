@@ -6,6 +6,7 @@ import { DEFAULT_THEME_TEAMS } from '../domain/teams.js';
 
 export interface DraftOrderEntry {
   participantId: string;
+  playerId?: string;
   participantName: string;
   order: number;
 }
@@ -14,10 +15,11 @@ export interface ActiveDraftSession {
   tournamentId: string;
   theme: string;
   availableTeams: string[];
-  chosenTeams: Record<string, string>; // participantId -> teamName
+  chosenTeams: Record<string, string>; // participantId/playerId -> teamName
   draftOrder: DraftOrderEntry[];
   currentTurnIndex: number;
   currentParticipantId: string;
+  currentPlayerId?: string;
   currentParticipantName: string;
   expiresAt: string;
   expiresAtMs: number;
@@ -29,16 +31,39 @@ export interface DraftTurnUpdatedPayload {
   tournamentId: string;
   currentTurnIndex: number;
   currentParticipantId: string;
+  currentPlayerId?: string;
   currentParticipantName: string;
+  draftOrder: DraftOrderEntry[];
   expiresAt: string;
   availableTeams: string[];
   chosenTeams: Record<string, string>;
+  chosenTeamsByPlayerId?: Record<string, string>;
+  chosenTeamsByParticipantName?: Record<string, string>;
   isComplete: boolean;
+}
+
+export function buildDraftPayloadExtras(session: ActiveDraftSession) {
+  const chosenTeamsByPlayerId: Record<string, string> = {};
+  const chosenTeamsByParticipantName: Record<string, string> = {};
+
+  for (const entry of session.draftOrder) {
+    const team = session.chosenTeams[entry.participantId] || (entry.playerId ? session.chosenTeams[entry.playerId] : undefined);
+    if (team) {
+      if (entry.playerId) {
+        chosenTeamsByPlayerId[entry.playerId] = team;
+      }
+      chosenTeamsByParticipantName[team] = entry.participantName;
+    }
+  }
+
+  return { chosenTeamsByPlayerId, chosenTeamsByParticipantName };
 }
 
 export interface DraftCompletedPayload {
   tournamentId: string;
   chosenTeams: Record<string, string>;
+  chosenTeamsByPlayerId?: Record<string, string>;
+  chosenTeamsByParticipantName?: Record<string, string>;
 }
 
 // In-memory active draft sessions indexed by tournamentId
@@ -86,6 +111,7 @@ export function startDraftSession(
     draftOrder: sortedOrder,
     currentTurnIndex: 0,
     currentParticipantId: currentParticipant?.participantId || '',
+    currentPlayerId: currentParticipant?.playerId || '',
     currentParticipantName: currentParticipant?.participantName || '',
     expiresAt,
     expiresAtMs,
@@ -103,24 +129,30 @@ export function startDraftSession(
   activeDraftSessions.set(tournamentId, session);
 
   if (io) {
+    const { chosenTeamsByPlayerId, chosenTeamsByParticipantName } = buildDraftPayloadExtras(session);
     const payload: DraftTurnUpdatedPayload = {
       tournamentId,
       currentTurnIndex: 0,
       currentParticipantId: session.currentParticipantId,
+      currentPlayerId: session.currentPlayerId,
       currentParticipantName: session.currentParticipantName,
+      draftOrder: session.draftOrder,
       expiresAt,
       availableTeams: session.availableTeams,
       chosenTeams: session.chosenTeams,
+      chosenTeamsByPlayerId,
+      chosenTeamsByParticipantName,
       isComplete: false,
     };
     io.to(`tournament:${tournamentId}`).emit('draft:turn_updated', payload);
+    io.emit('draft:turn_updated', payload);
   }
 
   return session;
 }
 
 /**
- * Automatically assigns a random remaining team when the 30-second timer expires.
+ * Automatically assigns a random remaining team when the 20-second timer expires.
  */
 export async function handleDraftTimeout(
   io: AppSocketServer | null,
@@ -139,7 +171,10 @@ export async function handleDraftTimeout(
   }
 
   // Pick random team from available
-  const currentPartId = session.currentParticipantId;
+  const currentEntry = session.draftOrder[session.currentTurnIndex];
+  const actualParticipantId = currentEntry?.participantId || session.currentParticipantId;
+  const actualPlayerId = currentEntry?.playerId;
+
   let assignedTeam = 'Equipo Asignado';
   if (session.availableTeams.length > 0) {
     const randIdx = Math.floor(Math.random() * session.availableTeams.length);
@@ -147,12 +182,15 @@ export async function handleDraftTimeout(
     session.availableTeams.splice(randIdx, 1);
   }
 
-  session.chosenTeams[currentPartId] = assignedTeam;
+  session.chosenTeams[actualParticipantId] = assignedTeam;
+  if (actualPlayerId) {
+    session.chosenTeams[actualPlayerId] = assignedTeam;
+  }
 
   // Persist to DB
   try {
     await prisma.tournamentParticipant.update({
-      where: { id: currentPartId },
+      where: { id: actualParticipantId },
       data: { teamName: assignedTeam },
     });
   } catch (err) {
@@ -179,7 +217,12 @@ export async function handleDraftPick(
     return { success: false, error: 'La sesión de draft no está activa.' };
   }
 
-  if (session.currentParticipantId !== participantId) {
+  const currentEntry = session.draftOrder[session.currentTurnIndex];
+  const isMatch =
+    session.currentParticipantId === participantId ||
+    (currentEntry && (currentEntry.participantId === participantId || currentEntry.playerId === participantId));
+
+  if (!isMatch) {
     return { success: false, error: 'No es tu turno para elegir equipo.' };
   }
 
@@ -192,7 +235,13 @@ export async function handleDraftPick(
 
   const exactTeamName = session.availableTeams[teamIdx];
   session.availableTeams.splice(teamIdx, 1);
-  session.chosenTeams[participantId] = exactTeamName;
+
+  const actualParticipantId = currentEntry?.participantId || session.currentParticipantId;
+  const actualPlayerId = currentEntry?.playerId;
+  session.chosenTeams[actualParticipantId] = exactTeamName;
+  if (actualPlayerId) {
+    session.chosenTeams[actualPlayerId] = exactTeamName;
+  }
 
   if (session.timer) {
     clearTimeout(session.timer);
@@ -202,7 +251,7 @@ export async function handleDraftPick(
   // Persist to DB
   try {
     await prisma.tournamentParticipant.update({
-      where: { id: participantId },
+      where: { id: actualParticipantId },
       data: { teamName: exactTeamName },
     });
   } catch (err) {
@@ -232,9 +281,12 @@ async function advanceDraftTurn(
     session.timer = undefined;
 
     if (io) {
+      const { chosenTeamsByPlayerId, chosenTeamsByParticipantName } = buildDraftPayloadExtras(session);
       const completedPayload: DraftCompletedPayload = {
         tournamentId: session.tournamentId,
         chosenTeams: session.chosenTeams,
+        chosenTeamsByPlayerId,
+        chosenTeamsByParticipantName,
       };
       io.to(`tournament:${session.tournamentId}`).emit('draft:completed', completedPayload);
       io.emit('draft:completed', completedPayload);
@@ -254,6 +306,7 @@ async function advanceDraftTurn(
   session.currentTurnIndex = nextIndex;
   const nextParticipant = session.draftOrder[nextIndex];
   session.currentParticipantId = nextParticipant.participantId;
+  session.currentPlayerId = nextParticipant.playerId;
   session.currentParticipantName = nextParticipant.participantName;
 
   const expiresAtMs = Date.now() + durationSeconds * 1000;
@@ -269,17 +322,23 @@ async function advanceDraftTurn(
   }, durationSeconds * 1000);
 
   if (io) {
+    const { chosenTeamsByPlayerId, chosenTeamsByParticipantName } = buildDraftPayloadExtras(session);
     const payload: DraftTurnUpdatedPayload = {
       tournamentId: session.tournamentId,
       currentTurnIndex: session.currentTurnIndex,
       currentParticipantId: session.currentParticipantId,
+      currentPlayerId: session.currentPlayerId,
       currentParticipantName: session.currentParticipantName,
+      draftOrder: session.draftOrder,
       expiresAt: session.expiresAt,
       availableTeams: session.availableTeams,
       chosenTeams: session.chosenTeams,
+      chosenTeamsByPlayerId,
+      chosenTeamsByParticipantName,
       isComplete: false,
     };
     io.to(`tournament:${session.tournamentId}`).emit('draft:turn_updated', payload);
+    io.emit('draft:turn_updated', payload);
   }
 
   return session;
@@ -316,11 +375,14 @@ export async function getOrRecoverDraftSession(
   const theme = tourney.theme || 'Apertura 2006';
   const defaultTeams = DEFAULT_THEME_TEAMS[theme] || DEFAULT_THEME_TEAMS['Apertura 2006'] || [];
 
-  const draftOrder: DraftOrderEntry[] = tourney.participants.map((p, idx) => ({
-    participantId: p.id,
-    participantName: `${p.player.firstName} ${p.player.lastName}`.trim(),
-    order: p.seed ?? idx + 1,
-  }));
+  const draftOrder: DraftOrderEntry[] = tourney.participants
+    .map((p, idx) => ({
+      participantId: p.id,
+      playerId: p.playerId,
+      participantName: `${p.player.firstName} ${p.player.lastName}`.trim(),
+      order: p.seed ?? idx + 1,
+    }))
+    .sort((a, b) => a.order - b.order);
 
   const chosenTeams: Record<string, string> = {};
   const chosenSet = new Set<string>();
@@ -328,6 +390,9 @@ export async function getOrRecoverDraftSession(
   for (const p of tourney.participants) {
     if (p.teamName) {
       chosenTeams[p.id] = p.teamName;
+      if (p.playerId) {
+        chosenTeams[p.playerId] = p.teamName;
+      }
       chosenSet.add(p.teamName.toLowerCase());
     }
   }
@@ -352,6 +417,7 @@ export async function getOrRecoverDraftSession(
     draftOrder,
     currentTurnIndex,
     currentParticipantId: currentParticipant?.participantId || '',
+    currentPlayerId: currentParticipant?.playerId || '',
     currentParticipantName: currentParticipant?.participantName || '',
     expiresAt,
     expiresAtMs,
@@ -385,6 +451,7 @@ export function registerDraftHandlers(io: AppSocketServer, socket: Socket): void
       try {
         const session = await getOrRecoverDraftSession(io, tournamentId);
         if (session) {
+          const { chosenTeamsByPlayerId, chosenTeamsByParticipantName } = buildDraftPayloadExtras(session);
           const data = {
             tournamentId: session.tournamentId,
             currentTurnIndex: session.currentTurnIndex,
@@ -393,6 +460,8 @@ export function registerDraftHandlers(io: AppSocketServer, socket: Socket): void
             expiresAt: session.expiresAt,
             availableTeams: session.availableTeams,
             chosenTeams: session.chosenTeams,
+            chosenTeamsByPlayerId,
+            chosenTeamsByParticipantName,
             draftOrder: session.draftOrder,
             isComplete: session.isComplete,
           };
@@ -421,6 +490,7 @@ export function registerDraftHandlers(io: AppSocketServer, socket: Socket): void
           payload.teamName
         );
         if (result.success && result.session) {
+          const { chosenTeamsByPlayerId, chosenTeamsByParticipantName } = buildDraftPayloadExtras(result.session);
           const data = {
             tournamentId: result.session.tournamentId,
             currentTurnIndex: result.session.currentTurnIndex,
@@ -429,6 +499,8 @@ export function registerDraftHandlers(io: AppSocketServer, socket: Socket): void
             expiresAt: result.session.expiresAt,
             availableTeams: result.session.availableTeams,
             chosenTeams: result.session.chosenTeams,
+            chosenTeamsByPlayerId,
+            chosenTeamsByParticipantName,
             isComplete: result.session.isComplete,
           };
           if (ack) ack({ ok: true, session: data });

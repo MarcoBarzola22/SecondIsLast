@@ -44,33 +44,27 @@ export function computeCountdownState(
 
 /**
  * Hook to manage a synchronized countdown timer from an expiration timestamp (expiresAt).
- * Implements the 120-second voting timer interface (RF-99, RF-100).
+ * Computes state synchronously on each render so newly provided expiresAt never starts as isExpired: true.
+ * Implements the synchronized voting timer interface (RF-99, RF-100).
  */
 export function useCountdown(
   expiresAt: string | null,
   totalDurationSeconds: number = 120
 ): CountdownState {
-  const [state, setState] = useState<CountdownState>(() =>
-    computeCountdownState(expiresAt, Date.now(), totalDurationSeconds)
-  );
+  const [, setTick] = useState<number>(() => Date.now());
 
   useEffect(() => {
-    setState(computeCountdownState(expiresAt, Date.now(), totalDurationSeconds));
-
     if (!expiresAt) return;
+    setTick(Date.now());
 
     const interval = setInterval(() => {
-      const current = computeCountdownState(expiresAt, Date.now(), totalDurationSeconds);
-      setState(current);
-
-      if (current.isExpired) {
-        clearInterval(interval);
-      }
+      setTick(Date.now());
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [expiresAt, totalDurationSeconds]);
+  }, [expiresAt]);
 
-  return state;
+  const nowMs = Date.now();
+  return computeCountdownState(expiresAt, nowMs, totalDurationSeconds);
 }
 

@@ -326,8 +326,8 @@ export class MatchService {
     const match = await this.prisma.match.findUnique({
       where: { id: matchId },
       include: {
-        homeParticipant: { include: { player: true } },
-        awayParticipant: { include: { player: true } },
+        homeParticipant: { include: { player: { include: { user: true } } } },
+        awayParticipant: { include: { player: { include: { user: true } } } },
         penaltiesWinner: { include: { player: true } },
       },
     });
@@ -337,7 +337,34 @@ export class MatchService {
     }
 
     // RF-106 & RF-112: Exclusively the Home player can submit scores. Admins cannot override.
-    if (!user.playerId || !match.homeParticipant || match.homeParticipant.playerId !== user.playerId) {
+    let isHome = Boolean(
+      (user.playerId && match.homeParticipant?.playerId === user.playerId) ||
+      (user.player?.id && match.homeParticipant?.playerId === user.player.id) ||
+      (user.id && (match.homeParticipant?.player as any)?.userId === user.id) ||
+      (user.email && (match.homeParticipant?.player as any)?.user?.email?.toLowerCase() === user.email?.toLowerCase())
+    );
+
+    if (!isHome && user.id) {
+      const dbUser = await this.prisma.user.findUnique({
+        where: { id: user.id },
+        select: { playerId: true, email: true },
+      });
+      if (dbUser?.playerId && match.homeParticipant?.playerId === dbUser.playerId) {
+        isHome = true;
+      }
+    }
+
+    if (!isHome && user.player && match.homeParticipant?.player) {
+      const uFirst = user.player.firstName?.toLowerCase().trim();
+      const uLast = user.player.lastName?.toLowerCase().trim();
+      const hFirst = match.homeParticipant.player.firstName?.toLowerCase().trim();
+      const hLast = match.homeParticipant.player.lastName?.toLowerCase().trim();
+      if (uFirst && hFirst && uFirst === hFirst && (!uLast || !hLast || uLast === hLast)) {
+        isHome = true;
+      }
+    }
+
+    if (!match.homeParticipant || !isHome) {
       throw new ForbiddenError(
         'Acceso denegado: solo el participante Local asignado puede cargar el resultado del partido.'
       );
@@ -462,9 +489,9 @@ export class MatchService {
     const updatedMatch = (await this.prisma.match.findUniqueOrThrow({
       where: { id: match.id },
       include: {
-        homeParticipant: { include: { player: true } },
-        awayParticipant: { include: { player: true } },
-        penaltiesWinner: { include: { player: true } },
+        homeParticipant: { include: { player: { include: { user: true } } } },
+        awayParticipant: { include: { player: { include: { user: true } } } },
+        penaltiesWinner: { include: { player: { include: { user: true } } } },
       },
     })) as MatchWithParticipants;
 
@@ -499,8 +526,8 @@ export class MatchService {
     const match = await this.prisma.match.findUnique({
       where: { id: matchId },
       include: {
-        homeParticipant: { include: { player: true } },
-        awayParticipant: { include: { player: true } },
+        homeParticipant: { include: { player: { include: { user: true } } } },
+        awayParticipant: { include: { player: { include: { user: true } } } },
         penaltiesWinner: { include: { player: true } },
       },
     });
@@ -523,6 +550,16 @@ export class MatchService {
         select: { playerId: true, email: true },
       });
       if (dbUser?.playerId && match.awayParticipant?.playerId === dbUser.playerId) {
+        isAway = true;
+      }
+    }
+
+    if (!isAway && user.player && match.awayParticipant?.player) {
+      const uFirst = user.player.firstName?.toLowerCase().trim();
+      const uLast = user.player.lastName?.toLowerCase().trim();
+      const aFirst = match.awayParticipant.player.firstName?.toLowerCase().trim();
+      const aLast = match.awayParticipant.player.lastName?.toLowerCase().trim();
+      if (uFirst && aFirst && uFirst === aFirst && (!uLast || !aLast || uLast === aLast)) {
         isAway = true;
       }
     }
@@ -589,17 +626,19 @@ export class MatchService {
     const updatedMatch = (await this.prisma.match.findUniqueOrThrow({
       where: { id: match.id },
       include: {
-        homeParticipant: { include: { player: true } },
-        awayParticipant: { include: { player: true } },
-        penaltiesWinner: { include: { player: true } },
+        homeParticipant: { include: { player: { include: { user: true } } } },
+        awayParticipant: { include: { player: { include: { user: true } } } },
+        penaltiesWinner: { include: { player: { include: { user: true } } } },
       },
     })) as MatchWithParticipants;
 
     if (io) {
-      io.to(`tournament:${match.tournamentId}`).emit('match:rejected', {
+      const rejectedPayload = {
         matchId: updatedMatch.id,
         version: updatedMatch.version,
-      });
+      };
+      io.to(`tournament:${match.tournamentId}`).emit('match:rejected', rejectedPayload);
+      io.emit('match:rejected', rejectedPayload);
     }
 
     return updatedMatch;
@@ -623,8 +662,8 @@ export class MatchService {
     const match = await this.prisma.match.findUnique({
       where: { id: matchId },
       include: {
-        homeParticipant: { include: { player: true } },
-        awayParticipant: { include: { player: true } },
+        homeParticipant: { include: { player: { include: { user: true } } } },
+        awayParticipant: { include: { player: { include: { user: true } } } },
         penaltiesWinner: { include: { player: true } },
       },
     });
@@ -647,6 +686,16 @@ export class MatchService {
         select: { playerId: true, email: true },
       });
       if (dbUser?.playerId && match.awayParticipant?.playerId === dbUser.playerId) {
+        isAway = true;
+      }
+    }
+
+    if (!isAway && user.player && match.awayParticipant?.player) {
+      const uFirst = user.player.firstName?.toLowerCase().trim();
+      const uLast = user.player.lastName?.toLowerCase().trim();
+      const aFirst = match.awayParticipant.player.firstName?.toLowerCase().trim();
+      const aLast = match.awayParticipant.player.lastName?.toLowerCase().trim();
+      if (uFirst && aFirst && uFirst === aFirst && (!uLast || !aLast || uLast === aLast)) {
         isAway = true;
       }
     }
@@ -716,7 +765,7 @@ export class MatchService {
       const tournament = await tx.tournament.findUniqueOrThrow({
         where: { id: match.tournamentId },
         include: {
-          participants: { include: { player: true } },
+          participants: { include: { player: { include: { user: true } } } },
         },
       });
 
@@ -767,8 +816,8 @@ export class MatchService {
       const fullMatches = await tx.match.findMany({
         where: { tournamentId: match.tournamentId },
         include: {
-          homeParticipant: { include: { player: true } },
-          awayParticipant: { include: { player: true } },
+          homeParticipant: { include: { player: { include: { user: true } } } },
+          awayParticipant: { include: { player: { include: { user: true } } } },
           penaltiesWinner: { include: { player: true } },
         },
         orderBy: [{ round: 'asc' }, { leg: 'asc' }, { createdAt: 'asc' }],
@@ -791,7 +840,7 @@ export class MatchService {
 
     // Broadcast WebSocket event `match:closed` (Plan §3.2 line 357)
     if (io) {
-      io.to(`tournament:${match.tournamentId}`).emit('match:closed', {
+      const closedPayload = {
         matchId: result.updatedMatch.id,
         seriesId: result.updatedMatch.seriesId,
         match: result.updatedMatch,
@@ -799,7 +848,9 @@ export class MatchService {
         standings: result.standings,
         bracket: result.bracket,
         unblockedParticipants: result.unblockedParticipants,
-      });
+      };
+      io.to(`tournament:${match.tournamentId}`).emit('match:closed', closedPayload);
+      io.emit('match:closed', closedPayload);
     }
 
     // Auto-finalize tournament if all matches in the tournament are closed (RF-110)

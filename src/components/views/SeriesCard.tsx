@@ -249,7 +249,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
     setIsSubmittingProposal(true);
     setProposalError(null);
     try {
-      const matchId = targetMatchLeg1?.id || series.id;
+      const matchId = series.matchIdLeg1 || targetMatchLeg1?.id || series.id;
       const res = await fetch(`/api/matches/${matchId}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -267,13 +267,11 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
       });
 
       if (!res.ok) {
-        if (res.status === 404) {
-          handleConfirm();
-          return;
-        }
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Error al enviar propuesta al rival.');
       }
+
+      window.dispatchEvent(new CustomEvent('tournament-rehydrate'));
     } catch (err: any) {
       setProposalError(err.message || 'Error de conexión.');
     } finally {
@@ -299,7 +297,9 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
     setIsSubmittingProposal(true);
     setProposalError(null);
     try {
-      const matchId = targetMatch?.id || `${series.id}_${leg}`;
+      const matchId = isLeg1
+        ? (series.matchIdLeg1 || targetMatch?.id || `${series.id}_leg1`)
+        : (series.matchIdLeg2 || targetMatch?.id || `${series.id}_leg2`);
       const res = await fetch(`/api/matches/${matchId}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -317,15 +317,11 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
       });
 
       if (!res.ok) {
-        if (res.status === 404) {
-          if (!isLeg1 && result.canConfirm) {
-            handleConfirm();
-          }
-          return;
-        }
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `Error al enviar partido de ${isLeg1 ? 'ida' : 'vuelta'}.`);
       }
+
+      window.dispatchEvent(new CustomEvent('tournament-rehydrate'));
     } catch (err: any) {
       setProposalError(err.message || 'Error de conexión.');
     } finally {

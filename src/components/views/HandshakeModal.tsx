@@ -359,7 +359,7 @@ export function HandshakeModal({
               ) : (
                 <XCircle className="h-3.5 w-3.5 mr-1" />
               )}
-              Rechazar propuesta
+              Rechazar (Mal cargado)
             </SecondaryButton>
 
             <PrimaryButton
@@ -372,7 +372,7 @@ export function HandshakeModal({
               ) : (
                 <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
               )}
-              Confirmar resultado
+              Confirmar Resultado
             </PrimaryButton>
           </div>
         </div>

@@ -2,7 +2,8 @@ import { Socket } from 'socket.io';
 import type { AppSocketServer } from './index.js';
 import { prisma as defaultPrisma } from '../db.js';
 import { computeVoteResults, type VoteEntry } from '../domain/voting.js';
-import { TournamentFormat } from '@prisma/client';
+import { TournamentFormat, TournamentStatus } from '@prisma/client';
+import { tournamentService } from '../services/tournamentService.js';
 
 export interface ActiveVotingSession {
   tournamentId: string;
@@ -197,6 +198,8 @@ export async function closeVotingSession(
   const result = computeVoteResults(voteEntries, session.options);
 
   // 3. Persist winner in tournament record
+  let resolvedWinner = result.winner;
+
   if (session.phase === 'FORMAT') {
     let resolvedFormat = result.winner;
     if (resolvedFormat.toLowerCase() === 'random') {
@@ -204,6 +207,7 @@ export async function closeVotingSession(
       const randIdx = Math.floor(Math.random() * validWithoutRandom.length);
       resolvedFormat = validWithoutRandom[randIdx] || 'bracket';
     }
+    resolvedWinner = resolvedFormat;
 
     const prismaFormat = mapDomainFormatToPrisma(resolvedFormat);
 
@@ -228,23 +232,97 @@ export async function closeVotingSession(
       if (val === 'TWO_LEGGED') twoLeggedCount++;
       else singleMatchCount++;
     }
-    const winnerMatchFormat = twoLeggedCount > singleMatchCount ? 'TWO_LEGGED' : 'SINGLE_MATCH';
+    let winnerMatchFormat = 'SINGLE_MATCH';
+    if (twoLeggedCount > singleMatchCount) {
+      winnerMatchFormat = 'TWO_LEGGED';
+    } else if (singleMatchCount > twoLeggedCount) {
+      winnerMatchFormat = 'SINGLE_MATCH';
+    } else {
+      winnerMatchFormat = Math.random() < 0.5 ? 'SINGLE_MATCH' : 'TWO_LEGGED';
+    }
 
     await prisma.tournament.update({
       where: { id: tournamentId },
       data: {
         format: prismaFormat,
         matchFormat: winnerMatchFormat as any,
+        status: TournamentStatus.VOTING_THEME,
       },
     });
+
+    // Auto-advance to phase THEME after 4 seconds (RF-99, RF-100)
+    if (io) {
+      setTimeout(async () => {
+        try {
+          await prisma.tournament.update({
+            where: { id: tournamentId },
+            data: { status: TournamentStatus.VOTING_THEME },
+          });
+          const themeOptions = tournamentService.getThemeVotingOptions();
+          startVotingSession(
+            io,
+            tournamentId,
+            'THEME',
+            themeOptions,
+            session.totalVoters,
+            60,
+            prisma
+          );
+        } catch (err) {
+          console.error('[VotingHandler] Error starting THEME voting session after FORMAT:', err);
+        }
+      }, 4000);
+    }
   } else if (session.phase === 'THEME') {
+    let resolvedTheme = result.winner;
+    const availableThemes = tournamentService.getAllAvailableThemeNames();
+    if (resolvedTheme.toLowerCase() === 'random') {
+      const randIdx = Math.floor(Math.random() * availableThemes.length);
+      resolvedTheme = availableThemes[randIdx] || 'Clásicos PES 6';
+    }
+    resolvedWinner = resolvedTheme;
+
     await prisma.tournament.update({
       where: { id: tournamentId },
       data: {
-        theme: result.winner,
+        theme: resolvedTheme,
+        status: TournamentStatus.VOTING_THEME,
       },
     });
+
+    // Auto-advance to phase ASSIGNMENT_METHOD after 4 seconds (RF-99, RF-100)
+    if (io) {
+      setTimeout(async () => {
+        try {
+          startVotingSession(
+            io,
+            tournamentId,
+            'ASSIGNMENT_METHOD',
+            ['DIRECT_DRAW', 'DRAFT_ORDER'],
+            session.totalVoters,
+            60,
+            prisma
+          );
+          io.to(`tournament:${tournamentId}`).emit('tournament:status', {
+            tournamentId,
+            status: TournamentStatus.VOTING_THEME,
+          });
+          io.emit('tournament:status', {
+            tournamentId,
+            status: TournamentStatus.VOTING_THEME,
+          });
+        } catch (err) {
+          console.error('[VotingHandler] Error starting ASSIGNMENT_METHOD voting session after THEME:', err);
+        }
+      }, 4000);
+    }
   } else if (session.phase === 'ASSIGNMENT_METHOD') {
+    let resolvedMethod = result.winner;
+    if (resolvedMethod !== 'DRAFT_ORDER' && resolvedMethod !== 'DIRECT_DRAW') {
+      resolvedMethod = Math.random() < 0.5 ? 'DIRECT_DRAW' : 'DRAFT_ORDER';
+    }
+    resolvedWinner = resolvedMethod;
+
     let settings: any = {};
     try {
       const tourney = await prisma.tournament.findUnique({
@@ -257,11 +335,29 @@ export async function closeVotingSession(
     } catch {
       // Gracefully continue
     }
-    settings.assignmentMethod = result.winner;
+    settings.assignmentMethod = resolvedMethod;
     await prisma.tournament.update({
       where: { id: tournamentId },
       data: { settings },
     });
+
+    if (io) {
+      setTimeout(async () => {
+        try {
+          const method = resolvedMethod.toUpperCase() === 'DRAFT_ORDER' ? 'DRAFT_ORDER' : 'DIRECT_DRAW';
+          await tournamentService.executeTeamDraw(
+            undefined as any,
+            io,
+            tournamentId,
+            undefined,
+            1200,
+            method as any
+          );
+        } catch (err) {
+          console.error('[VotingHandler] Error auto-triggering draw after assignment vote:', err);
+        }
+      }, 3000);
+    }
   }
 
   // 4. Clean up in-memory session
@@ -270,7 +366,7 @@ export async function closeVotingSession(
   // 5. Broadcast vote:ended event across room and globally
   const payload: VoteEndedPayload = {
     phase: session.phase,
-    winner: result.winner,
+    winner: resolvedWinner,
     matchFormat: session.phase === 'FORMAT' ? (await prisma.tournament.findUnique({ where: { id: tournamentId } }))?.matchFormat || 'SINGLE_MATCH' : undefined,
     wasDraw: result.wasDraw,
     tiedOptions: result.tiedOptions,

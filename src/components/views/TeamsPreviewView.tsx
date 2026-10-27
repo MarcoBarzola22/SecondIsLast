@@ -205,18 +205,11 @@ export function TeamsPreviewView({
         : 'Sorteo de Orden de Elección (Draft)';
     setWinnerAnnouncement(winnerTitle);
 
-    // Mostrar cartel grande durante 3 segundos, y recién ahí invocar automáticamente (T35)
+    // Mostrar cartel del Método Ganador durante 3 segundos
     setTimeout(() => {
       setWinnerAnnouncement(null);
-      if (winner === 'DIRECT_DRAW') {
-        handleStartDraw('DIRECT_DRAW');
-      } else {
-        if (onProceedToFixture) {
-          onProceedToFixture('DRAFT_ORDER');
-        }
-      }
     }, 3000);
-  }, [handleStartDraw, onProceedToFixture]);
+  }, []);
 
   // Synchronized WebSocket event listeners (RF-104, T33)
   useEffect(() => {
@@ -239,6 +232,16 @@ export function TeamsPreviewView({
         if (payload.draftOrder) {
           setDraftOrderResults(payload.draftOrder);
         }
+
+        // Deja visible durante 3 segundos el resultado final del sorteo y luego navega automáticamente
+        setTimeout(() => {
+          const finalMethod = (payload.method || assignmentMethod).toUpperCase();
+          if (finalMethod === 'DRAFT_ORDER') {
+            if (onProceedToFixture) {
+              onProceedToFixture('DRAFT_ORDER');
+            }
+          }
+        }, 3000);
       }
     };
 
@@ -303,11 +306,14 @@ export function TeamsPreviewView({
     };
   }, [socket, tournamentId, participantCount, assignmentMethod, onProceedToFixture]);
 
-  // Auto-close fallback when timer expires (T33, T34, T35, T36)
+  // Auto-close fallback when timer expires (T33, T34, T35, T36, T38)
   // ONLY triggers if votingExpiresAt is a valid date string and timer actually reached 0
   useEffect(() => {
-    const isValidExpires = typeof votingExpiresAt === 'string' && !isNaN(Date.parse(votingExpiresAt));
-    if (isValidExpires && votingCountdown.isExpired && !hasVotingEnded && tournamentId) {
+    if (!votingExpiresAt) return;
+    const expiryMs = Date.parse(votingExpiresAt);
+    if (isNaN(expiryMs) || expiryMs > Date.now()) return;
+
+    if (votingCountdown.isExpired && !hasVotingEnded && tournamentId) {
       fetch('/api/tournaments/close-voting', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -334,25 +340,12 @@ export function TeamsPreviewView({
 
             setTimeout(() => {
               setWinnerAnnouncement(null);
-              if (winner === 'DIRECT_DRAW') {
-                // Execute draw
-                fetch('/api/tournaments/draw-teams', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ tournamentId, assignmentMethod: 'DIRECT_DRAW' }),
-                  credentials: 'include',
-                }).catch((err) => console.warn('[TeamsPreviewView] Error auto-triggering draw:', err));
-              } else {
-                if (onProceedToFixture) {
-                  onProceedToFixture('DRAFT_ORDER');
-                }
-              }
             }, 3000);
           }
         })
         .catch((err) => console.warn('[TeamsPreviewView] Error closing voting on timeout:', err));
     }
-  }, [votingExpiresAt, votingCountdown.isExpired, hasVotingEnded, tournamentId, onProceedToFixture]);
+  }, [votingExpiresAt, votingCountdown.isExpired, hasVotingEnded, tournamentId]);
 
   // Confirm vote for assignment method directly from card buttons (T33, T34, T35)
   const handleConfirmVote = async (choice: 'DIRECT_DRAW' | 'DRAFT_ORDER') => {
@@ -392,18 +385,6 @@ export function TeamsPreviewView({
 
         setTimeout(() => {
           setWinnerAnnouncement(null);
-          if (winner === 'DIRECT_DRAW') {
-            fetch('/api/tournaments/draw-teams', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ tournamentId, assignmentMethod: 'DIRECT_DRAW' }),
-              credentials: 'include',
-            }).catch((err) => console.warn('[TeamsPreviewView] Error auto-triggering draw:', err));
-          } else {
-            if (onProceedToFixture) {
-              onProceedToFixture('DRAFT_ORDER');
-            }
-          }
         }, 3000);
       }
     } catch (err: any) {

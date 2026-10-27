@@ -13,7 +13,7 @@ export interface DrawAnimatedPayload {
   isFinal: boolean;
   assignments?: Record<string, string>;
   method?: 'DIRECT_DRAW' | 'DRAFT_ORDER';
-  draftOrder?: Array<{ order: number; participantId: string; participantName: string }>;
+  draftOrder?: Array<{ order: number; participantId: string; playerId?: string; participantName: string }>;
 }
 
 export interface ActiveDrawSession {
@@ -27,7 +27,7 @@ export interface ActiveDrawSession {
     isComplete: boolean;
     assignments: Record<string, string>;
     method?: 'DIRECT_DRAW' | 'DRAFT_ORDER';
-    draftOrder?: Array<{ order: number; participantId: string; participantName: string }>;
+    draftOrder?: Array<{ order: number; participantId: string; playerId?: string; participantName: string }>;
   };
 }
 

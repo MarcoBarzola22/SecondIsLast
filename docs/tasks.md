@@ -192,6 +192,41 @@
   Solucionar las 4 causas raíz de los fallos en vivo: (1) Permitir en `tournamentService.ts` y `tournaments.ts` iniciar la votación de `ASSIGNMENT_METHOD` cuando el torneo está en estado `VOTING_THEME`, unificando el endpoint `/api/tournaments/start-voting`; (2) Validar que `expiresAt` en `TeamsPreviewView.tsx` sea una cadena de fecha válida antes de asignarlo o disparar el auto-cierre para evitar el salto automático al instante; (3) Actualizar `buildActiveTournamentFromPayload` en `reducer.ts` para mapear fielmente las fases (`draft`, `theme`, `bracket`, etc.) junto con `teams` y `draftOrder`, y sincronizar `rehydrateActiveTournament()` en `App.tsx` al recibir `draft:turn_updated`, `tournament:status` ('DRAFT'), `vote:ended` y `fixture:ready`; (4) Relajar las validaciones de `TEAM_ASSIGNED` y `TEAMS_BATCH_ASSIGNED` en `reducer.ts` para que no crasheen si el estado está temporalmente desfasado; y (5) Simplificar la detección del Visitante en `handleMatchSubmitted` en `App.tsx` usando directamente el payload crudo sin fetch bloqueante.  
   - Cubre: RF-99, RF-100, RF-103, RF-104, RF-105, RF-108, RF-111, RF-112.  
   - Hecho cuando: La votación de método en `TeamsPreviewView.tsx` no se salta automáticamente y corre el reloj de 60s; las acciones de asignación de equipos no crashean el Reducer; y el Handshake modal salta al instante al usuario logueado como Visitante. 100% de tests green (`npm test` y `npm run server:test`).
+- [x] **T37 · Cirugía Integral Definitiva: Fix 500/400/404, Refresco de Lobby, Draft Roulette & Handshake Sincronizado**  
+  Solución integral a las 6 causas raíz detectadas en auditoría forense:  
+  1. **Fix Error 500 en `start-voting`:** Eliminado `TournamentStatus.DRAFT` inexistente en Prisma dentro de `startFormatVoting` (`tournamentService.ts`) e idempotencia de sesiones activas en `tournaments.ts` para evitar pisotón de temporizador en cargas concurrentes.  
+  2. **Refresco automático de Lobby:** Emisión global de `lobby:created` y `lobby:updated` (`tournaments.ts`, `lobbyHandler.ts`), y listeners reactivos en `LobbyView.tsx` para clientes sin torneo activo.  
+  3. **Votación -> Sorteo de Ruleta -> Entrada a Draft:** Banner de método ganador durante 3s en `TeamsPreviewView.tsx`, disparo de sorteo en backend con temporizador de 3s e idempotencia en `executeTeamDraw`, animación de ruleta a 1200ms (`draw:animated`) tanto para equipos como para orden de draft (1º, 2º, 3º, 4º) con visualización de resultado por 3s antes de navegar.  
+  4. **Protección contra expulsión de Draft & Fix 400 en Selección:** Inclusión de `draftSession` en `GET /api/tournaments/active` y protección en `App.tsx` para no regresar a `'equipos'`. Unificación de `playerId` y `participantId` en `DraftOrderEntry`, aceptación flexible de pick en `draftHandler.ts` y sincronización de `chosenTeamsByPlayerId` / `chosenTeamsByParticipantName` para mostrar `🔒 Elegido por [Nombre]` en `DraftView.tsx`.  
+  5. **Fix Definitivo de Handshake en Liga y Llaves:** Uso de UUID real de PostgreSQL `m.id` en `reducer.ts` para evitar 404 en `/api/matches/:id/submit`, formato canónico `{ a, b, cardsA, cardsB }` con `matchIdLeg1`/`matchIdLeg2` para llaves, eliminación del bypass 404 silencioso, evento `tournament-rehydrate` al confirmar el envío, resolución flexible de identidad y emisión global en `matchService.ts`, y apertura reactiva del HandshakeModal con "Confirmar Resultado" y "Rechazar (Mal cargado)".  
+  - Cubre: RF-94, RF-95, RF-99, RF-100, RF-103, RF-104, RF-108, RF-111, RF-112.  
+- [x] **T38 · Micro-Hotfix: TypeMismatch de Prisma en startFormatVoting**  
+  Incorporar `include: { participants: { where: { isPresent: true }, include: { player: true } } }` en el `tournament.update` de `startFormatVoting` (`tournamentService.ts`), resolviendo la falta de la propiedad `participants` en el tipo inferido de `updatedTournament`.  
+  - Cubre: RF-99, RF-100.  
+  - Hecho cuando: `npx tsc -p server/tsconfig.json` y `npx tsc --noEmit` compilan con 0 errores y `npm run server:test` pasa 100% en verde.
 
+- [x] **T39 · Encadenamiento Automático de Votaciones 60s, Fix de Cuenta Regresiva Sincrónica y Cierre con Podio Oficial**  
+  1. **Fix de Cierre Instantáneo en `useCountdown`:** Cálculo sincrónico por render de `secondsLeft` e `isExpired` a partir de `expiresAt` con guardas estrictas en `VotingView.tsx` y `TeamsPreviewView.tsx` evitando llamadas prematuras a `close-voting` si `Date.parse(expiresAt) > Date.now()`.  
+  2. **Tres Votaciones Encadenadas de 60s por el Servidor:**  
+     - **Votación 1 (`phase: 'FORMAT'`, 60s):** Opciones según N participantes + opción `"random"` ("🎲 Sortear Formato al Azar") + Single Match vs Two-Legged con desempate aleatorio uniforme. Tras 4s mostrando ganador, encadena automáticamente a Votación 2.  
+     - **Votación 2 (`phase: 'THEME'`, 60s):** Opciones con temáticas precargadas por Admin + temáticas reglamentarias por defecto (Champions Europa, Mundial / Selecciones, Libertadores Sudamérica, Apertura 2006, Clásicos PES 6) + opción `"random"`. Tras 4s mostrando temática ganadora, encadena automáticamente a Votación 3.  
+     - **Votación 3 (`phase: 'ASSIGNMENT_METHOD'`, 60s):** 'DIRECT_DRAW' ("🎲 Sorteo Directo de Equipos") vs 'DRAFT_ORDER' ("📋 Sorteo de Orden para Elegir"). Tras 3s mostrando cartel ganador, dispara automáticamente la ruleta sincronizada (1200ms) y avanza a fixture o `DraftView` (20s por turno).  
+  3. **Cierre de Torneo y Creación de Nuevo Torneo:** En `historyService.ts`, enriquecimiento del evento `tournament:finished` con podio completo (`championName`, `runnerUpName`, `thirdName`, `fourthName`). En `App.tsx`, modal de Podio Oficial con botones "Ver Tabla Histórica" y "Abrir Nuevo Torneo en Lobby" con reseteo total del estado activo. En `StandingsView.tsx`, botón directo para volver al Lobby a crear un torneo nuevo.  
+  4. **Tipado Estricto de Prisma:** Inclusión de `{ participants: { include: { player: true } } }` en todas las consultas de `tournamentService.ts` (`advancePhase`, `confirmPresence`, `removeParticipant`, `abandonTournament`).  
+  - Cubre: RF-99, RF-100, RF-101, RF-102, RF-103, RF-104, RF-110.  
+  - Hecho cuando: `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites completas de frontend (382 tests) y server (145 tests) pasan 100% en verde.
+
+- [x] **T40 · Hotfix Quirúrgico: Fix 400 en Votación de Temática y Orden Estricto 1°->2°->3°->4° en Draft**  
+  1. **Fix 400 Bad Request en Votación de Temática (`phase: 'THEME'`):**  
+     - En `votingHandler.ts`, actualización en PostgreSQL a `status: TournamentStatus.VOTING_THEME` al finalizar `FORMAT` y antes de iniciar la sesión `THEME`.  
+     - En `tournamentService.ts`, `castVote` y `startFormatVoting` aceptan `VOTING_FORMAT` para `phase === 'THEME'` auto-actualizándolo a `VOTING_THEME`.  
+     - En `teams.ts` y `tournamentService.ts`, unificación en `getThemeVotingOptions()` y `matchThemeName()` para aceptar temáticas reales con comparación insensible a mayúsculas, espacios y acentos.  
+     - En `App.tsx`, protección para conservar la vista `'votacion'` durante `FORMAT` y `THEME`, y prevención de sobreescritura de fase en `start-voting`.  
+  2. **Orden Estricto 1° -> 2° -> 3° -> 4° en Draft de Equipos:**  
+     - En `draftHandler.ts`, ordenamiento estricto por `order: 1, 2, 3, 4` con `{ order, participantId, playerId, participantName }` y avance secuencial de turno en `advanceDraftTurn` y `getOrRecoverDraftSession`, incluyendo `draftOrder`, `currentTurnIndex` y `currentPlayerId` en todos los payloads.  
+     - En `reducer.ts`, captura de `serverDraftOrder` y ordenamiento de `draftOrder` priorizando `playerId` sobre `participantId` para resolver correctamente `playersMap`.  
+     - En `DraftView.tsx`, renderizado de la lista `<ol>` usando directamente el orden exacto de `serverDraftOrder`, determinación precisa del turno mediante `serverCurrentTurnIndex` y emparejamiento dual (`playerId` y `participantId`) para que el turno avance en orden estricto `1° -> 2° -> 3° -> 4°` sin saltear jugadores.  
+  - Cubre: RF-99, RF-100, RF-101, RF-103, RF-104.  
+  - Hecho cuando: `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites completas de frontend (382 tests) y server (145 tests) pasan 100% en verde.
 
 

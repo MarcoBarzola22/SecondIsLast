@@ -14,6 +14,8 @@ import { VotingView } from './components/views/VotingView';
 import { TeamsPreviewView } from './components/views/TeamsPreviewView';
 import { RulesView } from './components/views/RulesView';
 import { HandshakeModal, type HandshakeMatchData } from './components/views/HandshakeModal';
+import { PrimaryButton, SecondaryButton } from './components/ui/Buttons';
+import { Trophy } from 'lucide-react';
 import { useAppDispatch, useAppState } from './state/AppContext';
 import { useAuth } from './context/AuthContext';
 import { useSocket } from './context/SocketContext';
@@ -27,6 +29,7 @@ export default function App() {
   const { socket } = useSocket();
   const { isOnline } = useNetworkStatus();
   const [liveHandshakeMatch, setLiveHandshakeMatch] = useState<HandshakeMatchData | null>(null);
+  const [finishedTournamentModal, setFinishedTournamentModal] = useState<any | null>(null);
 
   // Derive initial active view from persistent tournament phase (RF-40) - default is always 'lobby' (T29)
   const [view, setView] = useState<ViewType>(() => {
@@ -145,8 +148,14 @@ export default function App() {
               });
             }
           } else if (status === 'VOTING_THEME') {
-            // VOTING_THEME routes strictly to 'equipos', NEVER 'votacion' (Item 4)
-            setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'equipos'));
+            const hasDraftSession = Boolean(data.tournament.draftSession);
+            const vs = data.tournament.votingSession || data.votingSession;
+            setView((curr) => {
+              if (curr === 'tabla' || curr === 'reglamento') return curr;
+              if (hasDraftSession || curr === 'draft') return 'draft';
+              if (!vs || vs.phase === 'THEME' || vs.phase === 'FORMAT') return 'votacion';
+              return 'equipos';
+            });
           } else if (status === 'IN_PROGRESS') {
             const format = (data.tournament.format || '').toLowerCase();
             if (format === 'bracket') setView('bracket');
@@ -189,7 +198,7 @@ export default function App() {
       if (payload?.status === 'VOTING_FORMAT') {
         setView('votacion');
       } else if (payload?.status === 'VOTING_THEME') {
-        setView('equipos');
+        setView((curr) => (curr === 'votacion' ? 'votacion' : 'equipos'));
       } else if (payload?.status === 'DRAFT') {
         setView('draft');
       }
@@ -199,7 +208,7 @@ export default function App() {
     };
 
     const handleVoteStarted = (payload: any) => {
-      if (payload?.phase === 'FORMAT') {
+      if (payload?.phase === 'FORMAT' || payload?.phase === 'THEME') {
         setVotingSessionData({
           expiresAt: payload.expiresAt,
           options: payload.options,
@@ -207,7 +216,7 @@ export default function App() {
           totalVoters: payload.totalVoters,
         });
         setView('votacion');
-      } else {
+      } else if (payload?.phase === 'ASSIGNMENT_METHOD') {
         setView('equipos');
       }
     };
@@ -219,6 +228,7 @@ export default function App() {
     };
 
     const handleDraftTurnUpdated = async () => {
+      setView('draft');
       if (isOnline) {
         await rehydrateActiveTournament();
       }
@@ -279,18 +289,25 @@ export default function App() {
     };
   }, [socket, isOnline, user, cloudTournament?.format, rehydrateActiveTournament]);
 
-  // Global Handshake event listener from cards (T35)
+  // Global Handshake event listener from cards and rehydrate dispatcher (T35, T37)
   useEffect(() => {
     const handleOpenHandshake = (event: any) => {
       if (event?.detail) {
         setLiveHandshakeMatch(event.detail);
       }
     };
+    const handleTournamentRehydrate = () => {
+      if (isOnline) {
+        rehydrateActiveTournament();
+      }
+    };
     window.addEventListener('open-handshake-modal', handleOpenHandshake);
+    window.addEventListener('tournament-rehydrate', handleTournamentRehydrate);
     return () => {
       window.removeEventListener('open-handshake-modal', handleOpenHandshake);
+      window.removeEventListener('tournament-rehydrate', handleTournamentRehydrate);
     };
-  }, []);
+  }, [isOnline, rehydrateActiveTournament]);
 
   // Live WebSocket Handshake Notification & Sequential Unlock (RF-105, RF-108, RF-114, RF-115, RF-119, T34, T35)
   useEffect(() => {
@@ -403,15 +420,15 @@ export default function App() {
 
     const handleTournamentFinished = (payload: any) => {
       setLiveHandshakeMatch(null);
+      saveOfflineTournament(null);
+      setCloudTournament(null);
+      setActiveTournamentId(undefined);
       dispatch({
         type: 'TOURNAMENT_FINISHED',
-        summaryId: payload.tournamentId || crypto.randomUUID(),
+        summaryId: payload?.tournamentId || crypto.randomUUID(),
         now: new Date().toISOString(),
       });
-
-      if (isOnline) {
-        rehydrateActiveTournament();
-      }
+      setFinishedTournamentModal(payload);
     };
 
     socket.on('match:submitted', handleMatchSubmitted);
@@ -509,7 +526,7 @@ export default function App() {
           <DoubleEliminationView onTournamentFinished={() => setView('tabla')} />
         )}
 
-        {view === 'tabla' && <StandingsView />}
+        {view === 'tabla' && <StandingsView onGoToLobby={() => setView('lobby')} />}
 
         {view === 'reglamento' && <RulesView />}
       </main>
@@ -526,6 +543,82 @@ export default function App() {
             }
           }}
         />
+      )}
+
+      {finishedTournamentModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-md animate-in fade-in duration-300"
+        >
+          <div className="relative w-full max-w-lg rounded-2xl border border-primary/50 bg-card p-6 shadow-[0_0_50px_rgba(34,197,94,0.3)] text-center space-y-6">
+            <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-primary/20 border-2 border-primary glow-green">
+              <Trophy className="h-10 w-10 text-primary" />
+            </div>
+
+            <div className="space-y-1.5">
+              <span className="text-xs font-bold uppercase tracking-widest text-primary font-mono">
+                Definición Oficial
+              </span>
+              <h2 className="font-display text-2xl sm:text-3xl font-black text-foreground text-glow uppercase">
+                🏆 ¡Torneo Finalizado!
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                Podio Oficial de la Juntada
+              </p>
+            </div>
+
+            <div className="space-y-2.5 rounded-xl border border-border/80 bg-secondary/40 p-4">
+              <div className="flex items-center justify-between p-2.5 rounded-lg border border-amber-500/50 bg-amber-500/10">
+                <span className="flex items-center gap-2 font-display text-sm font-bold text-amber-300">
+                  <span>🥇</span> Campeón
+                </span>
+                <span className="font-display text-sm font-black text-foreground uppercase">
+                  {finishedTournamentModal.podium?.championName || finishedTournamentModal.podium?.champion || 'Campeón'}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between p-2.5 rounded-lg border border-slate-400/50 bg-slate-500/10">
+                <span className="flex items-center gap-2 font-display text-sm font-bold text-slate-300">
+                  <span>🥈</span> Subcampeón
+                </span>
+                <span className="font-display text-sm font-black text-foreground uppercase">
+                  {finishedTournamentModal.podium?.runnerUpName || finishedTournamentModal.podium?.runnerUp || 'Subcampeón'}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between p-2.5 rounded-lg border border-amber-700/50 bg-amber-800/10">
+                <span className="flex items-center gap-2 font-display text-sm font-bold text-amber-500">
+                  <span>🥉</span> 3er Puesto
+                </span>
+                <span className="font-display text-sm font-black text-foreground uppercase">
+                  {finishedTournamentModal.podium?.thirdName || finishedTournamentModal.podium?.third || '3er Puesto'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+              <SecondaryButton
+                onClick={() => {
+                  setFinishedTournamentModal(null);
+                  setView('tabla');
+                }}
+                className="w-full sm:w-auto text-xs py-2.5 px-4 font-bold uppercase tracking-wider"
+              >
+                Ver Tabla Histórica
+              </SecondaryButton>
+              <PrimaryButton
+                onClick={() => {
+                  setFinishedTournamentModal(null);
+                  setView('lobby');
+                }}
+                className="w-full sm:w-auto text-xs py-2.5 px-5 font-bold uppercase tracking-wider glow-green shadow-[0_0_20px_rgba(34,197,94,0.35)]"
+              >
+                Abrir Nuevo Torneo en Lobby
+              </PrimaryButton>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

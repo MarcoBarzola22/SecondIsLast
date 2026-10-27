@@ -557,6 +557,11 @@ describe('Lobby, Presence & Quorum API and WebSocket Events (T13 · RF-93 to RF-
       expect(mockPrisma.tournament.update).toHaveBeenCalledWith({
         where: { id: 't-active' },
         data: { status: TournamentStatus.ABANDONED },
+        include: {
+          participants: {
+            include: { player: true },
+          },
+        },
       });
       expect(res.tournament.status).toBe(TournamentStatus.ABANDONED);
     });

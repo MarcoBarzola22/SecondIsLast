@@ -112,6 +112,8 @@ export interface Series {
   isBye?: boolean;
   status?: 'PENDING_SUBMISSION' | 'PENDING_CONFIRMATION' | 'CLOSED';
   version?: number;
+  matchIdLeg1?: string;
+  matchIdLeg2?: string;
 }
 
 export type TournamentType =
@@ -183,6 +185,7 @@ export interface ActiveTournament {
   participantIds: PlayerId[]; // 4 to 10 players
   theme: string | null;
   draftOrder: PlayerId[]; // Draft order (shuffled via Fisher-Yates)
+  serverDraftOrder?: Array<{ order: number; participantId: string; playerId?: string; participantName: string }>;
   bracketOrder?: PlayerId[]; // Bracket seeding order (supports manual matchups RF-87)
   teams: Record<PlayerId, string>;
   byes: PlayerId[]; // Direct pass players: 0 (4p), 3 (5p), 2 (6p)

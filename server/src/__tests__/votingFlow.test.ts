@@ -122,6 +122,7 @@ describe('Multiplayer Voting & Navigation Integration Flow (T28 · RF-94, RF-97,
 
     // In-memory mock tournament store
     let currentTournamentStatus = TournamentStatus.VOTING_FORMAT;
+    let currentSettings: any = {};
     const tournamentVotes: Array<{ participantId: string; choice: string }> = [];
 
     (vi.spyOn(prisma.tournament, 'findFirst') as any).mockImplementation(async () => ({
@@ -131,7 +132,7 @@ describe('Multiplayer Voting & Navigation Integration Flow (T28 · RF-94, RF-97,
       participantCount: 4,
       currentRound: 1,
       participants,
-      settings: {},
+      settings: currentSettings,
       createdAt: new Date(),
       updatedAt: new Date(),
     }));
@@ -143,7 +144,7 @@ describe('Multiplayer Voting & Navigation Integration Flow (T28 · RF-94, RF-97,
       participantCount: 4,
       currentRound: 1,
       participants,
-      settings: {},
+      settings: currentSettings,
       createdAt: new Date(),
       updatedAt: new Date(),
     }));
@@ -151,6 +152,9 @@ describe('Multiplayer Voting & Navigation Integration Flow (T28 · RF-94, RF-97,
     const updateTournamentSpy = (vi.spyOn(prisma.tournament, 'update') as any).mockImplementation(async (args: any) => {
       if (args.data.status) {
         currentTournamentStatus = args.data.status;
+      }
+      if (args.data.settings) {
+        currentSettings = { ...currentSettings, ...args.data.settings };
       }
       return {
         id: tourneyId,

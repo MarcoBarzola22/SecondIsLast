@@ -23,12 +23,16 @@ import { formatPlayerName } from '../../domain/players';
 import { buildStandings } from '../../domain/standings';
 import type { PlayerId, PlayerStats } from '../../domain/types';
 import { useAppDispatch, useAppState } from '../../state/AppContext';
-import { DangerButton, SecondaryButton } from '../ui/Buttons';
+import { DangerButton, SecondaryButton, PrimaryButton } from '../ui/Buttons';
 import { Panel } from '../ui/Panel';
 
 type StandingsTab = 'general' | 'annual' | 'h2h' | 'awards';
 
-export function StandingsView() {
+export interface StandingsViewProps {
+  onGoToLobby?: () => void;
+}
+
+export function StandingsView({ onGoToLobby }: StandingsViewProps = {}) {
   const { players, stats, history, headToHead, annualRankings, activeTournament } =
     useAppState();
   const dispatch = useAppDispatch();
@@ -300,18 +304,30 @@ export function StandingsView() {
           </button>
         </div>
 
-        {/* Botón de reseteo rápido en la pestaña general */}
-        {activeTab === 'general' && (
-          <DangerButton
-            disabled={rows.length === 0 && totalTournaments === 0}
-            onClick={handleResetHistory}
-            title="Resetear tabla histórica"
-            className="py-1.5 px-3 text-xs"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            <span>Resetear Historial</span>
-          </DangerButton>
-        )}
+        <div className="flex items-center gap-2">
+          {onGoToLobby && (
+            <PrimaryButton
+              type="button"
+              onClick={onGoToLobby}
+              className="py-1.5 px-3 text-xs glow-green font-bold uppercase tracking-wider"
+            >
+              <span>➕ Ir al Lobby / Nuevo Torneo</span>
+            </PrimaryButton>
+          )}
+
+          {/* Botón de reseteo rápido en la pestaña general */}
+          {activeTab === 'general' && (
+            <DangerButton
+              disabled={rows.length === 0 && totalTournaments === 0}
+              onClick={handleResetHistory}
+              title="Resetear tabla histórica"
+              className="py-1.5 px-3 text-xs"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>Resetear Historial</span>
+            </DangerButton>
+          )}
+        </div>
       </div>
 
       {/* 2. PESTAÑA A: TABLA HISTÓRICA GENERAL (RF-34, RF-79) */}

@@ -57,14 +57,22 @@ export function DraftView({
   const [teamInput, setTeamInput] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  // Synchronized 20s Draft Turn State (T34, T35)
+  // Synchronized 20s Draft Turn State (T34, T35, T37, T40)
   const [serverExpiresAt, setServerExpiresAt] = useState<string | null>(null);
   const [serverCurrentParticipantId, setServerCurrentParticipantId] = useState<string | null>(null);
   const [serverCurrentParticipantName, setServerCurrentParticipantName] = useState<string | null>(null);
+  const [serverDraftOrder, setServerDraftOrder] = useState<Array<{
+    order: number;
+    participantId: string;
+    playerId?: string;
+    participantName: string;
+  }>>([]);
+  const [serverCurrentTurnIndex, setServerCurrentTurnIndex] = useState<number>(0);
   const [serverAvailableTeams, setServerAvailableTeams] = useState<string[]>([]);
+  const [chosenTeamsByParticipantName, setChosenTeamsByParticipantName] = useState<Record<string, string>>({});
   const turnCountdown = useCountdown(serverExpiresAt, 20);
 
-  // Synchronized WebSocket event listeners for live 20s draft (T34, T35)
+  // Synchronized WebSocket event listeners for live 20s draft (T34, T35, T37, T40)
   useEffect(() => {
     if (!socket || !activeTournament?.id) return;
 
@@ -75,13 +83,22 @@ export function DraftView({
         if (res.session.currentParticipantName) {
           setServerCurrentParticipantName(res.session.currentParticipantName);
         }
+        if (Array.isArray(res.session.draftOrder)) {
+          setServerDraftOrder(res.session.draftOrder);
+        }
+        if (res.session.currentTurnIndex !== undefined) {
+          setServerCurrentTurnIndex(res.session.currentTurnIndex);
+        }
         if (Array.isArray(res.session.availableTeams)) {
           setServerAvailableTeams(res.session.availableTeams);
         }
-        if (res.session.chosenTeams) {
+        if (res.session.chosenTeamsByParticipantName) {
+          setChosenTeamsByParticipantName((prev) => ({ ...prev, ...res.session.chosenTeamsByParticipantName }));
+        }
+        if (res.session.chosenTeamsByPlayerId || res.session.chosenTeams) {
           dispatch({
             type: 'TEAMS_BATCH_ASSIGNED',
-            teams: res.session.chosenTeams,
+            teams: { ...(res.session.chosenTeams || {}), ...(res.session.chosenTeamsByPlayerId || {}) },
           });
         }
       }
@@ -93,32 +110,74 @@ export function DraftView({
       if (payload.currentParticipantName) {
         setServerCurrentParticipantName(payload.currentParticipantName);
       }
+      if (Array.isArray(payload.draftOrder)) {
+        setServerDraftOrder(payload.draftOrder);
+      }
+      if (payload.currentTurnIndex !== undefined) {
+        setServerCurrentTurnIndex(payload.currentTurnIndex);
+      }
       if (Array.isArray(payload.availableTeams)) {
         setServerAvailableTeams(payload.availableTeams);
       }
-      if (payload.chosenTeams) {
+      if (payload.chosenTeamsByParticipantName) {
+        setChosenTeamsByParticipantName((prev) => ({ ...prev, ...payload.chosenTeamsByParticipantName }));
+      }
+      if (payload.chosenTeamsByPlayerId || payload.chosenTeams) {
         dispatch({
           type: 'TEAMS_BATCH_ASSIGNED',
-          teams: payload.chosenTeams,
+          teams: { ...(payload.chosenTeams || {}), ...(payload.chosenTeamsByPlayerId || {}) },
         });
       }
     };
 
+    const handleSyncResponse = (payload: any) => {
+      if (payload) {
+        setServerExpiresAt(payload.expiresAt);
+        setServerCurrentParticipantId(payload.currentParticipantId);
+        if (payload.currentParticipantName) {
+          setServerCurrentParticipantName(payload.currentParticipantName);
+        }
+        if (Array.isArray(payload.draftOrder)) {
+          setServerDraftOrder(payload.draftOrder);
+        }
+        if (payload.currentTurnIndex !== undefined) {
+          setServerCurrentTurnIndex(payload.currentTurnIndex);
+        }
+        if (Array.isArray(payload.availableTeams)) {
+          setServerAvailableTeams(payload.availableTeams);
+        }
+        if (payload.chosenTeamsByParticipantName) {
+          setChosenTeamsByParticipantName((prev) => ({ ...prev, ...payload.chosenTeamsByParticipantName }));
+        }
+        if (payload.chosenTeamsByPlayerId || payload.chosenTeams) {
+          dispatch({
+            type: 'TEAMS_BATCH_ASSIGNED',
+            teams: { ...(payload.chosenTeams || {}), ...(payload.chosenTeamsByPlayerId || {}) },
+          });
+        }
+      }
+    };
+
     const handleDraftCompleted = (payload: any) => {
-      if (payload.chosenTeams) {
+      if (payload.chosenTeamsByParticipantName) {
+        setChosenTeamsByParticipantName((prev) => ({ ...prev, ...payload.chosenTeamsByParticipantName }));
+      }
+      if (payload.chosenTeamsByPlayerId || payload.chosenTeams) {
         dispatch({
           type: 'TEAMS_BATCH_ASSIGNED',
-          teams: payload.chosenTeams,
+          teams: { ...(payload.chosenTeams || {}), ...(payload.chosenTeamsByPlayerId || {}) },
         });
       }
       setServerExpiresAt(null);
     };
 
     socket.on('draft:turn_updated', handleTurnUpdated);
+    socket.on('draft:sync:response', handleSyncResponse);
     socket.on('draft:completed', handleDraftCompleted);
 
     return () => {
       socket.off('draft:turn_updated', handleTurnUpdated);
+      socket.off('draft:sync:response', handleSyncResponse);
       socket.off('draft:completed', handleDraftCompleted);
     };
   }, [socket, activeTournament?.id, dispatch]);
@@ -205,22 +264,40 @@ export function DraftView({
     return 'Participante';
   }, [serverCurrentParticipantName, effectiveCurrentDrafterId, playersMap]);
 
-  // Determines whether the current authenticated user has the turn (T35)
+  // Determines whether the current authenticated user has the turn (T35, T40)
   const isUserTurn = useMemo(() => {
-    if (!serverCurrentParticipantId) return true; // offline/dev mode without socket server
+    if (!serverCurrentParticipantId && !serverDraftOrder.length) return true; // offline/dev mode without socket server
     if (!user) return false;
 
     const userPlayerId = user.playerId || user.player?.id;
     const userId = user.id;
-    const drafterName = currentDrafterDisplayName.trim().toLowerCase();
-    const userName = (user.name || '').trim().toLowerCase();
 
+    // 1. Direct match with current entry in turn
+    const currentEntry =
+      serverDraftOrder.length > serverCurrentTurnIndex
+        ? serverDraftOrder[serverCurrentTurnIndex]
+        : null;
+
+    if (currentEntry) {
+      if (userPlayerId && (currentEntry.playerId === userPlayerId || currentEntry.participantId === userPlayerId)) {
+        return true;
+      }
+      if (currentEntry.participantId === userId || (currentEntry.playerId && currentEntry.playerId === userId)) {
+        return true;
+      }
+    }
+
+    // 2. Match with serverCurrentParticipantId / effectiveCurrentDrafterId
     if (userPlayerId && (effectiveCurrentDrafterId === userPlayerId || serverCurrentParticipantId === userPlayerId)) {
       return true;
     }
     if (userId && (effectiveCurrentDrafterId === userId || serverCurrentParticipantId === userId)) {
       return true;
     }
+
+    // 3. Name fallback
+    const drafterName = currentDrafterDisplayName.trim().toLowerCase();
+    const userName = (user.name || '').trim().toLowerCase();
     if (user.player) {
       const full = `${user.player.firstName} ${user.player.lastName}`.trim().toLowerCase();
       if (full && drafterName && (drafterName.includes(full) || full.includes(drafterName))) {
@@ -231,7 +308,86 @@ export function DraftView({
       return true;
     }
     return false;
-  }, [user, effectiveCurrentDrafterId, serverCurrentParticipantId, currentDrafterDisplayName]);
+  }, [
+    user,
+    serverDraftOrder,
+    serverCurrentTurnIndex,
+    effectiveCurrentDrafterId,
+    serverCurrentParticipantId,
+    currentDrafterDisplayName,
+  ]);
+
+  // Unified rendered draft order honoring strict server order 1°, 2°, 3°, 4° (T40)
+  const renderedDraftEntries = useMemo(() => {
+    const sourceOrder =
+      serverDraftOrder.length > 0
+        ? serverDraftOrder
+        : (activeTournament as any).serverDraftOrder &&
+          Array.isArray((activeTournament as any).serverDraftOrder) &&
+          (activeTournament as any).serverDraftOrder.length > 0
+        ? (activeTournament as any).serverDraftOrder
+        : null;
+
+    if (sourceOrder && sourceOrder.length > 0) {
+      return [...sourceOrder]
+        .sort((a, b) => a.order - b.order)
+        .map((entry, index) => {
+          const player = entry.playerId ? playersMap.get(entry.playerId) : undefined;
+          const displayName = entry.participantName || (player ? formatPlayerName(player) : `Jugador ${index + 1}`);
+          const assignedTeam =
+            (entry.playerId ? teams[entry.playerId] : undefined) ||
+            teams[entry.participantId] ||
+            (entry.participantName && chosenTeamsByParticipantName[entry.participantName]
+              ? chosenTeamsByParticipantName[entry.participantName]
+              : undefined);
+          const hasChosen = Boolean(assignedTeam && assignedTeam.trim().length > 0);
+          const isCurrentTurn =
+            index === serverCurrentTurnIndex ||
+            (serverCurrentParticipantId &&
+              (serverCurrentParticipantId === entry.participantId || serverCurrentParticipantId === entry.playerId)) ||
+            (effectiveCurrentDrafterId &&
+              (effectiveCurrentDrafterId === entry.participantId || effectiveCurrentDrafterId === entry.playerId));
+
+          return {
+            id: entry.participantId || entry.playerId || `entry-${index}`,
+            participantId: entry.participantId,
+            playerId: entry.playerId || entry.participantId,
+            order: entry.order ?? index + 1,
+            displayName,
+            assignedTeam,
+            hasChosen,
+            isCurrentTurn,
+          };
+        });
+    }
+
+    return draftOrder.map((playerId, index) => {
+      const player = playersMap.get(playerId);
+      const assignedTeam = teams[playerId];
+      const isCurrentTurn = index === serverCurrentTurnIndex || effectiveCurrentDrafterId === playerId;
+      const hasChosen = Boolean(assignedTeam && assignedTeam.trim().length > 0);
+      return {
+        id: playerId,
+        participantId: playerId,
+        playerId,
+        order: index + 1,
+        displayName: player ? formatPlayerName(player) : 'Jugador',
+        assignedTeam,
+        hasChosen,
+        isCurrentTurn,
+      };
+    });
+  }, [
+    serverDraftOrder,
+    serverCurrentTurnIndex,
+    serverCurrentParticipantId,
+    effectiveCurrentDrafterId,
+    activeTournament,
+    draftOrder,
+    playersMap,
+    teams,
+    chosenTeamsByParticipantName,
+  ]);
 
   const orderForReveal =
     draftOrder.length === participantIds.length ? draftOrder : participantIds;
@@ -367,7 +523,12 @@ export function DraftView({
     }
   };
 
-  const handleConfirmTeam = async (e?: FormEvent, playerId?: PlayerId, customPick?: string) => {
+  const handleConfirmTeam = async (
+    e?: FormEvent,
+    playerId?: PlayerId,
+    customPick?: string,
+    participantId?: string
+  ) => {
     if (e) e.preventDefault();
     setError(null);
 
@@ -376,11 +537,20 @@ export function DraftView({
       return;
     }
 
-    const targetPlayerId = playerId || effectiveCurrentDrafterId;
-    if (!targetPlayerId) return;
+    const currentEntry =
+      serverDraftOrder.length > serverCurrentTurnIndex
+        ? serverDraftOrder[serverCurrentTurnIndex]
+        : null;
 
+    const targetPlayerId = playerId || currentEntry?.playerId || effectiveCurrentDrafterId;
+    const targetParticipantId =
+      participantId || currentEntry?.participantId || serverCurrentParticipantId || targetPlayerId;
+
+    if (!targetPlayerId && !targetParticipantId) return;
+
+    const keyForValidation = targetPlayerId || targetParticipantId!;
     const rawChoice = customPick ?? teamInput;
-    const validation = validateTeamName(rawChoice, teams, targetPlayerId);
+    const validation = validateTeamName(rawChoice, teams, keyForValidation);
     if (!validation.isValid) {
       setError(validation.errorMessage);
       return;
@@ -388,21 +558,31 @@ export function DraftView({
 
     const sanitizedChoice = validation.sanitizedTeamName;
 
-    // Dispatch locally in frontend state
-    dispatch({
-      type: 'TEAM_ASSIGNED',
-      playerId: targetPlayerId,
-      team: sanitizedChoice,
-    });
+    // Dispatch locally in frontend state for both targetPlayerId and targetParticipantId
+    if (targetPlayerId) {
+      dispatch({
+        type: 'TEAM_ASSIGNED',
+        playerId: targetPlayerId,
+        team: sanitizedChoice,
+      });
+    }
+    if (targetParticipantId && targetParticipantId !== targetPlayerId) {
+      dispatch({
+        type: 'TEAM_ASSIGNED',
+        playerId: targetParticipantId,
+        team: sanitizedChoice,
+      });
+    }
 
     setTeamInput('');
 
-    // Synchronize via WebSockets and REST fallback (T33)
+    // Synchronize via WebSockets and REST fallback (T33, T40)
     if (activeTournament.id) {
+      const idToSend = targetParticipantId || targetPlayerId!;
       if (socket) {
         socket.emit('draft:pick', {
           tournamentId: activeTournament.id,
-          participantId: targetPlayerId,
+          participantId: idToSend,
           teamName: sanitizedChoice,
         });
       }
@@ -412,7 +592,7 @@ export function DraftView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tournamentId: activeTournament.id,
-          participantId: targetPlayerId,
+          participantId: idToSend,
           teamName: sanitizedChoice,
         }),
         credentials: 'include',
@@ -604,17 +784,18 @@ export function DraftView({
                     const chosenByPlayer = chosenByPlayerId ? playersMap.get(chosenByPlayerId) : null;
 
                     if (isChosen) {
+                      const drafterName = chosenTeamsByParticipantName[teamName] || (chosenByPlayer ? formatPlayerName(chosenByPlayer) : null);
                       return (
                         <div
                           key={teamName}
                           className="flex flex-col items-center justify-center p-3 rounded-lg border border-border/40 bg-secondary/20 opacity-40 cursor-not-allowed text-center select-none"
-                          title={`Ya elegido por ${chosenByPlayer ? formatPlayerName(chosenByPlayer) : 'otro participante'}`}
+                          title={`Ya elegido por ${drafterName || 'otro participante'}`}
                         >
                           <span className="line-through text-xs font-semibold text-muted-foreground truncate w-full">
                             {teamName}
                           </span>
-                          <span className="text-[10px] font-mono text-muted-foreground flex items-center gap-1 mt-1">
-                            🔒 {chosenByPlayer ? formatPlayerName(chosenByPlayer) : 'Elegido'}
+                          <span className="text-[10px] font-mono text-muted-foreground flex items-center gap-1 mt-1 truncate max-w-full px-1">
+                            🔒 {drafterName ? `Elegido por ${drafterName}` : 'Elegido'}
                           </span>
                         </div>
                       );
@@ -642,7 +823,16 @@ export function DraftView({
                         key={teamName}
                         type="button"
                         onClick={() => {
-                          handleConfirmTeam(undefined, effectiveCurrentDrafterId!, teamName);
+                          const currentEntry =
+                            serverDraftOrder.length > serverCurrentTurnIndex
+                              ? serverDraftOrder[serverCurrentTurnIndex]
+                              : null;
+                          handleConfirmTeam(
+                            undefined,
+                            currentEntry?.playerId || effectiveCurrentDrafterId!,
+                            teamName,
+                            currentEntry?.participantId || serverCurrentParticipantId || undefined
+                          );
                         }}
                         className="flex flex-col items-center justify-center p-3 rounded-lg border-2 border-primary/50 bg-primary/10 hover:border-primary hover:bg-primary/25 hover:scale-[1.02] text-foreground font-bold text-xs transition cursor-pointer shadow-sm text-center"
                         title={`Hacé clic para elegir ${teamName}`}
@@ -665,17 +855,21 @@ export function DraftView({
             </div>
 
             <ol className="space-y-3">
-              {draftOrder.map((playerId, index) => {
-                const player = playersMap.get(playerId);
-                const assignedTeam = teams[playerId];
-                const isCurrentTurn = effectiveCurrentDrafterId === playerId;
-                const hasChosen = Boolean(
-                  assignedTeam && assignedTeam.trim().length > 0
-                );
+              {renderedDraftEntries.map((item, index) => {
+                const {
+                  id,
+                  playerId,
+                  participantId,
+                  order,
+                  displayName,
+                  assignedTeam,
+                  hasChosen,
+                  isCurrentTurn,
+                } = item;
 
                 return (
                   <li
-                    key={playerId}
+                    key={id || index}
                     className={`flex flex-col gap-3 rounded-sm border p-4 transition sm:flex-row sm:items-center ${
                       isCurrentTurn
                         ? 'border-accent bg-accent/10 glow-blue shadow-[0_0_15px_rgba(56,189,248,0.2)]'
@@ -688,19 +882,19 @@ export function DraftView({
                     <div className="flex items-center gap-3">
                       <span
                         className={`flex h-10 w-12 items-center justify-center rounded-sm font-display font-black text-sm ${
-                          index === 0
+                          order === 1
                             ? 'bg-accent text-accent-foreground glow-blue'
                             : isCurrentTurn
                               ? 'bg-primary text-primary-foreground'
                               : 'bg-secondary text-accent'
                         }`}
                       >
-                        {index + 1}°
+                        {order}°
                       </span>
 
                       {/* Nombre del jugador */}
                       <span className="w-44 truncate text-lg font-semibold text-foreground">
-                        {player ? formatPlayerName(player) : 'Jugador'}
+                        {displayName}
                       </span>
                     </div>
 
@@ -719,7 +913,9 @@ export function DraftView({
                       ) : isCurrentTurn ? (
                         isUserTurn ? (
                           <form
-                            onSubmit={(e) => handleConfirmTeam(e, playerId)}
+                            onSubmit={(e) =>
+                              handleConfirmTeam(e, playerId, undefined, participantId)
+                            }
                             className="flex flex-col gap-2 sm:flex-row"
                           >
                             <input
@@ -739,7 +935,9 @@ export function DraftView({
                           </form>
                         ) : (
                           <div className="flex items-center gap-2 rounded-sm border border-border/60 bg-secondary/30 px-3 py-2 text-xs text-muted-foreground italic">
-                            <span>🔒 Esperando que {currentDrafterDisplayName} elija su equipo (tiempo restante: {turnCountdown.formattedTime})</span>
+                            <span>
+                              🔒 Esperando que {currentDrafterDisplayName} elija su equipo (tiempo restante: {turnCountdown.formattedTime})
+                            </span>
                           </div>
                         )
                       ) : (

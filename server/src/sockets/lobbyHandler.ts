@@ -6,6 +6,7 @@ import { getFormatVotingOptions } from '../domain/voting.js';
 import { startVotingSession } from './votingHandler.js';
 
 export interface LobbyUpdatedPayload {
+  tournamentId?: string;
   participants: any[];
   count: number;
   canStart: boolean;
@@ -124,6 +125,7 @@ export function broadcastLobbyUpdated(
   }
 
   const payload: LobbyUpdatedPayload = {
+    tournamentId,
     participants,
     count,
     canStart,
@@ -133,6 +135,7 @@ export function broadcastLobbyUpdated(
   if (io) {
     try {
       io.to(`tournament:${tournamentId}`).emit('lobby:updated', payload);
+      io.emit('lobby:updated', payload);
     } catch (err) {
       console.warn('[LobbyHandler] Error emitting lobby:updated:', err);
     }

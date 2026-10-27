@@ -1627,8 +1627,18 @@ export function buildActiveTournamentFromPayload(payload: any): ActiveTournament
     }
   }
 
-  const draftOrder: string[] = Array.isArray(payload.draftOrder) && payload.draftOrder.length > 0
-    ? payload.draftOrder.map((item: any) => typeof item === 'string' ? item : (item.participantId || item.playerId || item.id))
+  const rawDraftOrder = Array.isArray(payload.draftOrder)
+    ? payload.draftOrder
+    : payload.draftSession?.draftOrder && Array.isArray(payload.draftSession.draftOrder)
+    ? payload.draftSession.draftOrder
+    : [];
+
+  const serverDraftOrder = rawDraftOrder.length > 0 && typeof rawDraftOrder[0] === 'object'
+    ? [...rawDraftOrder].sort((a: any, b: any) => (a.order ?? a.seed ?? 999) - (b.order ?? b.seed ?? 999))
+    : undefined;
+
+  const draftOrder: string[] = rawDraftOrder.length > 0
+    ? rawDraftOrder.map((item: any) => typeof item === 'string' ? item : (item.playerId || item.player?.id || item.participantId || item.id))
     : [...participants]
         .sort((a: any, b: any) => (a.seed ?? 999) - (b.seed ?? 999))
         .map((p: any) => p.playerId || p.player?.id || p.id)
@@ -1652,7 +1662,7 @@ export function buildActiveTournamentFromPayload(payload: any): ActiveTournament
 
     if (tournamentType === 'league' || tournamentType === 'league_playoffs') {
       leagueMatches.push({
-        id: m.seriesId || m.id,
+        id: m.id,
         round: m.round,
         playerA: homeId || '',
         playerB: awayId || '',
@@ -1667,7 +1677,7 @@ export function buildActiveTournamentFromPayload(payload: any): ActiveTournament
     } else if (tournamentType === 'group_stage') {
       const gid: GroupId = seriesId.includes('GB') ? 'B' : 'A';
       groupMatches.push({
-        id: m.seriesId || m.id,
+        id: m.id,
         groupId: gid,
         round: m.round,
         playerA: homeId || '',
@@ -1691,23 +1701,41 @@ export function buildActiveTournamentFromPayload(payload: any): ActiveTournament
       else if (sLower === 'f' || sLower.includes('final')) roundName = 'final';
       else if (sLower === 'tp' || sLower.includes('tercer')) roundName = 'third_place';
 
+      const isLeg2 = m.leg === 2;
+
       seriesMap.set(seriesId, {
         id: seriesId,
         round: roundName,
         playerA: homeId,
         playerB: awayId,
-        leg1: {
-          scoreA: m.homeScore,
-          scoreB: m.awayScore,
-          cardsA: { yellow: m.homeYellowCards ?? 0, red: m.homeRedCards ?? 0 },
-          cardsB: { yellow: m.awayYellowCards ?? 0, red: m.awayRedCards ?? 0 },
-        },
-        leg2: {
-          scoreA: null,
-          scoreB: null,
-          cardsA: { yellow: 0, red: 0 },
-          cardsB: { yellow: 0, red: 0 },
-        },
+        matchIdLeg1: isLeg2 ? undefined : m.id,
+        matchIdLeg2: isLeg2 ? m.id : undefined,
+        leg1: isLeg2
+          ? {
+              a: null,
+              b: null,
+              cardsA: { yellow: 0, red: 0 },
+              cardsB: { yellow: 0, red: 0 },
+            }
+          : {
+              a: m.homeScore ?? null,
+              b: m.awayScore ?? null,
+              cardsA: { yellow: m.homeYellowCards ?? 0, red: m.homeRedCards ?? 0 },
+              cardsB: { yellow: m.awayYellowCards ?? 0, red: m.awayRedCards ?? 0 },
+            },
+        leg2: isLeg2
+          ? {
+              a: m.awayScore ?? null,
+              b: m.homeScore ?? null,
+              cardsA: { yellow: m.awayYellowCards ?? 0, red: m.awayRedCards ?? 0 },
+              cardsB: { yellow: m.homeYellowCards ?? 0, red: m.homeRedCards ?? 0 },
+            }
+          : {
+              a: null,
+              b: null,
+              cardsA: { yellow: 0, red: 0 },
+              cardsB: { yellow: 0, red: 0 },
+            },
         penaltyWinner: m.penaltiesWinner?.playerId || m.penaltiesWinnerId || null,
         confirmed: m.status === 'CLOSED',
         winnerTo: null,
@@ -1719,11 +1747,23 @@ export function buildActiveTournamentFromPayload(payload: any): ActiveTournament
     } else {
       const s = seriesMap.get(seriesId)!;
       if (m.leg === 2) {
+        s.matchIdLeg2 = m.id;
         s.leg2 = {
-          scoreA: m.awayScore,
-          scoreB: m.homeScore,
+          a: m.awayScore ?? null,
+          b: m.homeScore ?? null,
           cardsA: { yellow: m.awayYellowCards ?? 0, red: m.awayRedCards ?? 0 },
           cardsB: { yellow: m.homeYellowCards ?? 0, red: m.homeRedCards ?? 0 },
+        };
+        if (m.status !== 'CLOSED') {
+          s.confirmed = false;
+        }
+      } else {
+        s.matchIdLeg1 = m.id;
+        s.leg1 = {
+          a: m.homeScore ?? null,
+          b: m.awayScore ?? null,
+          cardsA: { yellow: m.homeYellowCards ?? 0, red: m.homeRedCards ?? 0 },
+          cardsB: { yellow: m.awayYellowCards ?? 0, red: m.awayRedCards ?? 0 },
         };
         if (m.status !== 'CLOSED') {
           s.confirmed = false;
@@ -1761,6 +1801,7 @@ export function buildActiveTournamentFromPayload(payload: any): ActiveTournament
     participantIds,
     theme: payload.theme || null,
     draftOrder: draftOrder.length > 0 ? draftOrder : participantIds,
+    serverDraftOrder,
     teams,
     byes,
     series,

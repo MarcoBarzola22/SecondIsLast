@@ -97,7 +97,94 @@ export const DEFAULT_THEME_TEAMS: Record<string, string[]> = {
     'Liga de Quito',
     'Colo-Colo',
   ],
+  'Champions (Europa)': [
+    'Real Madrid',
+    'Manchester City',
+    'Bayern Munich',
+    'Paris Saint-Germain',
+    'Arsenal',
+    'Liverpool',
+    'FC Barcelona',
+    'Inter de Milán',
+    'Atlético de Madrid',
+    'Borussia Dortmund',
+    'Bayer Leverkusen',
+    'Juventus',
+  ],
+  'Mundial / Selecciones': [
+    'Argentina',
+    'Brasil',
+    'Italia',
+    'Francia',
+    'Alemania',
+    'Inglaterra',
+    'España',
+    'Portugal',
+    'Holanda',
+    'Costa de Marfil',
+    'República Checa',
+    'Suecia',
+  ],
+  'Libertadores (Sudamérica)': [
+    'Boca Juniors',
+    'River Plate',
+    'Flamengo',
+    'Palmeiras',
+    'Fluminense',
+    'Santos',
+    'São Paulo',
+    'Peñarol',
+    'Nacional',
+    'Olimpia',
+    'Liga de Quito',
+    'Colo-Colo',
+  ],
 };
+
+/**
+ * Normalizes a string removing accents, whitespace, and case.
+ */
+export function normalizeThemeString(str: string): string {
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Unifies valid theme options for theme voting (DEFAULT_THEME_TEAMS + custom + 'random').
+ */
+export function getThemeVotingOptions(customThemes: string[] = []): string[] {
+  const defaultThemes = [
+    'Apertura 2006',
+    'Clásicos PES 6',
+    'Champions (Europa)',
+    'Mundial / Selecciones',
+    'Libertadores (Sudamérica)',
+    ...Object.keys(DEFAULT_THEME_TEAMS),
+  ];
+  return Array.from(new Set([...defaultThemes, ...customThemes, 'random']));
+}
+
+/**
+ * Finds matching theme name (case-insensitive, accent-insensitive, trimmed).
+ */
+export function matchThemeName(choice: string, availableThemes: string[]): string | null {
+  const clean = normalizeThemeString(choice);
+  if (clean === 'random' || clean.includes('random') || clean.includes('azar')) {
+    return 'random';
+  }
+  for (const theme of availableThemes) {
+    const norm = normalizeThemeString(theme);
+    if (norm === clean || norm.includes(clean) || clean.includes(norm)) {
+      return theme;
+    }
+  }
+  return null;
+}
+
 
 export interface TeamValidationResult {
   isValid: boolean;
@@ -168,7 +255,20 @@ export function getAvailableTeamsForTheme(
     return [...DEFAULT_THEME_TEAMS[theme]];
   }
 
-  return [];
+  const norm = (theme || '').trim().toLowerCase();
+  for (const [key, teams] of Object.entries(customThemeTeams)) {
+    if (key.toLowerCase() === norm || key.toLowerCase().includes(norm) || norm.includes(key.toLowerCase())) {
+      return [...teams];
+    }
+  }
+
+  for (const [key, teams] of Object.entries(DEFAULT_THEME_TEAMS)) {
+    if (key.toLowerCase() === norm || key.toLowerCase().includes(norm) || norm.includes(key.toLowerCase())) {
+      return [...teams];
+    }
+  }
+
+  return DEFAULT_THEME_TEAMS['Clásicos PES 6'] ?? [];
 }
 
 export interface DrawAnimationStep {
@@ -183,6 +283,7 @@ export interface DrawAnimationStep {
 export interface DraftOrderEntry {
   order: number;
   participantId: PlayerId;
+  playerId?: string;
   participantName: string;
 }
 
@@ -241,7 +342,7 @@ export function createDrawPlan(
  * Generates deterministic draft pick order plan (1st, 2nd, 3rd pick...) without assigning teams.
  */
 export function createDraftOrderPlan(
-  participants: Array<{ id: PlayerId; name: string }>,
+  participants: Array<{ id: PlayerId; playerId?: string; name: string }>,
   rng: RngFn = Math.random
 ): DrawPlan {
   const shuffledParticipants = shuffle(participants, rng);
@@ -257,6 +358,7 @@ export function createDraftOrderPlan(
     draftOrder.push({
       order: orderNum,
       participantId: p.id,
+      playerId: p.playerId,
       participantName: p.name,
     });
 

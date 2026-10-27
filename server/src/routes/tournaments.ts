@@ -16,11 +16,12 @@ import {
   getActiveVotingSession,
   cancelVotingSession,
 } from '../sockets/votingHandler.js';
-import { handleDraftPick } from '../sockets/draftHandler.js';
+import { handleDraftPick, getActiveDraftSession } from '../sockets/draftHandler.js';
 import { getSocketServer } from '../sockets/index.js';
 import { Role, TournamentStatus } from '@prisma/client';
 import { prisma } from '../db.js';
 import { getFormatVotingOptions } from '../domain/voting.js';
+import { matchThemeName } from '../domain/teams.js';
 
 const router = Router();
 
@@ -92,18 +93,21 @@ router.get('/active', optionalAuthMiddleware, async (req: Request, res: Response
 
     const tourneySettings = (tournament.settings as any) || {};
     const assignmentMethod = tourneySettings.assignmentMethod || null;
+    const draftSession = getActiveDraftSession(tournament.id);
 
     res.status(200).json({
       tournament: {
         ...tournament,
         lobbyExpiresAt,
         votingSession: votingSessionData,
+        draftSession,
         myVote,
         myMatchFormat,
         assignmentMethod,
       },
       lobbyExpiresAt,
       votingSession: votingSessionData,
+      draftSession,
       myVote,
       myMatchFormat,
       assignmentMethod,
@@ -126,6 +130,11 @@ router.post('/lobby', async (req: Request, res: Response) => {
   try {
     const { name } = req.body || {};
     const tournament = await tournamentService.createLobby(name);
+    const io = getIO(req);
+    if (io) {
+      io.emit('lobby:created', { tournament });
+      broadcastLobbyUpdated(io, tournament.id, (tournament as any).participants || []);
+    }
     res.status(201).json({ tournament });
   } catch (error: any) {
     if (error instanceof ConflictError || error.statusCode === 409 || error.message?.includes('activo')) {
@@ -311,7 +320,73 @@ router.post('/start-voting', async (req: Request, res: Response) => {
     const user = req.user!;
     const { tournamentId, phase = 'FORMAT' } = req.body || {};
 
+    // If an active, non-closed voting session already exists for this tournament and phase, return it without resetting timer
+    if (tournamentId) {
+      const existing = getActiveVotingSession(tournamentId);
+      if (existing && existing.phase === phase && !existing.closed) {
+        const votesCast = await prisma.tournamentVote.count({
+          where: {
+            tournamentId: existing.tournamentId,
+            phase: existing.phase as any,
+          },
+        });
+        const tourney = await prisma.tournament.findUnique({
+          where: { id: existing.tournamentId },
+          include: { participants: { include: { player: true } } },
+        });
+        return res.status(200).json({
+          ok: true,
+          tournament: tourney,
+          phase: existing.phase,
+          options: existing.options,
+          expiresAt: existing.expiresAt,
+          totalVoters: existing.totalVoters,
+          votesCast,
+          session: {
+            phase: existing.phase,
+            options: existing.options,
+            expiresAt: existing.expiresAt,
+            totalVoters: existing.totalVoters,
+            votesCast,
+          },
+        });
+      }
+    }
+
     const result = await tournamentService.startFormatVoting(user, tournamentId, phase);
+
+    // Also check resolved tournament ID
+    const existingResolved = getActiveVotingSession(result.tournament.id);
+    if (existingResolved && !existingResolved.closed) {
+      if (existingResolved.phase !== phase) {
+        return res.status(400).json({
+          error: `Ya existe una sesión de votación activa en fase ${existingResolved.phase}. Esperá a que finalice.`,
+        });
+      }
+      const votesCast = await prisma.tournamentVote.count({
+        where: {
+          tournamentId: existingResolved.tournamentId,
+          phase: existingResolved.phase as any,
+        },
+      });
+      return res.status(200).json({
+        ok: true,
+        tournament: result.tournament,
+        phase: existingResolved.phase,
+        options: existingResolved.options,
+        expiresAt: existingResolved.expiresAt,
+        totalVoters: existingResolved.totalVoters,
+        votesCast,
+        session: {
+          phase: existingResolved.phase,
+          options: existingResolved.options,
+          expiresAt: existingResolved.expiresAt,
+          totalVoters: existingResolved.totalVoters,
+          votesCast,
+        },
+      });
+    }
+
     const io = getIO(req);
 
     cancelLobbyTimer(result.tournament.id);
@@ -340,11 +415,13 @@ router.post('/start-voting', async (req: Request, res: Response) => {
       options: result.options,
       expiresAt: session.expiresAt,
       totalVoters: result.totalVoters,
+      votesCast: 0,
       session: {
         phase: session.phase,
         options: session.options,
         expiresAt: session.expiresAt,
         totalVoters: session.totalVoters,
+        votesCast: 0,
       },
     });
   } catch (error: any) {
@@ -429,7 +506,7 @@ router.post('/vote', async (req: Request, res: Response) => {
       const isValidStatus =
         tourneyInDb &&
         ((votePhase === 'FORMAT' && (tourneyInDb.status === 'VOTING_FORMAT' || tourneyInDb.status === 'LOBBY')) ||
-          (votePhase === 'THEME' && tourneyInDb.status === 'VOTING_THEME') ||
+          (votePhase === 'THEME' && (tourneyInDb.status === 'VOTING_THEME' || tourneyInDb.status === 'VOTING_FORMAT')) ||
           (votePhase === 'ASSIGNMENT_METHOD' &&
             (tourneyInDb.status === 'VOTING_THEME' || tourneyInDb.status === 'IN_PROGRESS' || tourneyInDb.status === 'VOTING_FORMAT')));
 
@@ -439,7 +516,7 @@ router.post('/vote', async (req: Request, res: Response) => {
           votePhase === 'FORMAT'
             ? getFormatVotingOptions(tourneyInDb.participants.length)
             : votePhase === 'THEME'
-            ? ['clasicos', 'selecciones', 'champions', 'libertadores']
+            ? tournamentService.getThemeVotingOptions()
             : ['DIRECT_DRAW', 'DRAFT_ORDER'];
 
         session = startVotingSession(
@@ -456,21 +533,35 @@ router.post('/vote', async (req: Request, res: Response) => {
       }
     }
 
-    // Validate choice is one of the valid options (RF-99), case-insensitive check and allow 'random' (Item 3)
-    const cleanChoice = choice.trim().toLowerCase();
-    const isChoiceValid =
-      cleanChoice === 'random' ||
-      session.options.some((opt) => opt.toLowerCase() === cleanChoice);
+    // Validate choice is one of the valid options (RF-99), case-insensitive and accent-insensitive check
+    let isChoiceValid = false;
+    let normalizedChoice = choice;
+
+    if (votePhase === 'THEME') {
+      const allThemeOptions = Array.from(new Set([...session.options, ...tournamentService.getThemeVotingOptions()]));
+      const matched = matchThemeName(choice, allThemeOptions);
+      if (matched) {
+        isChoiceValid = true;
+        normalizedChoice = matched;
+      }
+    } else {
+      const cleanChoice = choice.trim().toLowerCase();
+      isChoiceValid =
+        cleanChoice === 'random' ||
+        session.options.some((opt) => opt.toLowerCase() === cleanChoice);
+
+      if (isChoiceValid) {
+        normalizedChoice =
+          cleanChoice === 'random'
+            ? 'random'
+            : (session.options.find((opt) => opt.toLowerCase() === cleanChoice) || cleanChoice);
+      }
+    }
 
     if (!isChoiceValid) {
       res.status(400).json({ error: `La opción "${choice}" no es válida para esta votación.` });
       return;
     }
-
-    const normalizedChoice =
-      cleanChoice === 'random'
-        ? 'random'
-        : (session.options.find((opt) => opt.toLowerCase() === cleanChoice) || cleanChoice);
 
     const voteResult = await tournamentService.castVote(
       user,

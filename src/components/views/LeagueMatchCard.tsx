@@ -245,12 +245,10 @@ export function LeagueMatchCard({
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        if (res.status === 404) {
-          handleConfirm();
-          return;
-        }
         throw new Error(data.error || 'Error al proponer resultado.');
       }
+
+      window.dispatchEvent(new CustomEvent('tournament-rehydrate'));
     } catch (err: any) {
       setProposalError(err.message || 'Error al enviar propuesta.');
     } finally {

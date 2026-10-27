@@ -129,11 +129,16 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
     if (!socket) return;
 
     const handleLobbyUpdated = (payload: {
+      tournamentId?: string;
       participants: LobbyParticipant[];
       count: number;
       canStart: boolean;
       lobbyExpiresAt?: string | null;
     }) => {
+      if (!tournament) {
+        fetchActiveTournament();
+        return;
+      }
       setParticipants(payload.participants || []);
       const newCount = payload.count ?? payload.participants?.length ?? 0;
       setCount(newCount);
@@ -146,7 +151,12 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
       setError(null);
     };
 
+    const handleLobbyCreated = () => {
+      fetchActiveTournament();
+    };
+
     socket.on('lobby:updated', handleLobbyUpdated);
+    socket.on('lobby:created', handleLobbyCreated);
 
     const handleVoteStarted = () => {
       onProceedToVoting?.();
@@ -163,10 +173,11 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
 
     return () => {
       socket.off('lobby:updated', handleLobbyUpdated);
+      socket.off('lobby:created', handleLobbyCreated);
       socket.off('vote:started', handleVoteStarted);
       socket.off('tournament:status', handleTournamentStatus);
     };
-  }, [socket, onProceedToVoting]);
+  }, [socket, onProceedToVoting, tournament, fetchActiveTournament]);
 
   // Check if current user is confirmed in the lobby
   const isUserConfirmed = Boolean(

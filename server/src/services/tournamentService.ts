@@ -9,7 +9,7 @@ import {
   createDraftOrderPlan,
   DEFAULT_THEME_TEAMS,
 } from '../domain/teams.js';
-import { startDrawAnimation } from '../sockets/drawHandler.js';
+import { startDrawAnimation, getActiveDrawSession } from '../sockets/drawHandler.js';
 import { startDraftSession } from '../sockets/draftHandler.js';
 import type { AppSocketServer } from '../sockets/index.js';
 import { generateTournamentFixture } from '../domain/fixture.js';
@@ -215,6 +215,11 @@ export class TournamentService {
     const updated = await this.prisma.tournament.update({
       where: { id: tournament.id },
       data: { status: targetStatus },
+      include: {
+        participants: {
+          include: { player: true },
+        },
+      },
     });
 
     if (io) {
@@ -440,6 +445,11 @@ export class TournamentService {
     const updatedTournament = await this.prisma.tournament.update({
       where: { id: tournament.id },
       data: { participantCount: count },
+      include: {
+        participants: {
+          include: { player: true },
+        },
+      },
     });
 
     return {
@@ -513,6 +523,11 @@ export class TournamentService {
     const updatedTournament = await this.prisma.tournament.update({
       where: { id: tournament.id },
       data: { participantCount: count },
+      include: {
+        participants: {
+          include: { player: true },
+        },
+      },
     });
 
     return {
@@ -540,8 +555,10 @@ export class TournamentService {
   }> {
     const allowedStatuses =
       phase === 'ASSIGNMENT_METHOD'
-        ? [TournamentStatus.VOTING_THEME, TournamentStatus.LOBBY, TournamentStatus.DRAFT]
-        : [TournamentStatus.LOBBY];
+        ? [TournamentStatus.VOTING_THEME, TournamentStatus.VOTING_FORMAT, TournamentStatus.LOBBY]
+        : phase === 'THEME'
+        ? [TournamentStatus.VOTING_THEME, TournamentStatus.VOTING_FORMAT, TournamentStatus.LOBBY]
+        : [TournamentStatus.LOBBY, TournamentStatus.VOTING_FORMAT];
 
     const tournament = await this.prisma.tournament.findFirst({
       where: {
@@ -585,12 +602,13 @@ export class TournamentService {
     }
 
     // Filter valid formats based strictly on N (RF-99), including explicit RANDOM option
+    const formatOptions = getFormatVotingOptions(count);
     const options =
       phase === 'ASSIGNMENT_METHOD'
         ? ['DIRECT_DRAW', 'DRAFT_ORDER']
         : phase === 'THEME'
-        ? ['clasicos', 'selecciones', 'champions', 'libertadores']
-        : getFormatVotingOptions(count);
+        ? this.getThemeVotingOptions()
+        : (formatOptions.includes('random') ? formatOptions : [...formatOptions, 'random']);
 
     let updatedTournament = tournament;
     if (phase === 'FORMAT') {
@@ -598,6 +616,25 @@ export class TournamentService {
         where: { id: tournament.id },
         data: {
           status: TournamentStatus.VOTING_FORMAT,
+        },
+        include: {
+          participants: {
+            where: { isPresent: true },
+            include: { player: true },
+          },
+        },
+      });
+    } else if (phase === 'THEME') {
+      updatedTournament = await this.prisma.tournament.update({
+        where: { id: tournament.id },
+        data: {
+          status: TournamentStatus.VOTING_THEME,
+        },
+        include: {
+          participants: {
+            where: { isPresent: true },
+            include: { player: true },
+          },
         },
       });
     }
@@ -624,17 +661,18 @@ export class TournamentService {
     participant: TournamentParticipant;
     votesCast: number;
   }> {
-    const expectedStatus =
-      phase === 'FORMAT' ? TournamentStatus.VOTING_FORMAT : TournamentStatus.VOTING_THEME;
+    const expectedStatuses =
+      phase === 'FORMAT'
+        ? [TournamentStatus.VOTING_FORMAT, TournamentStatus.LOBBY]
+        : phase === 'THEME'
+        ? [TournamentStatus.VOTING_THEME, TournamentStatus.VOTING_FORMAT]
+        : [TournamentStatus.VOTING_THEME, TournamentStatus.VOTING_FORMAT, TournamentStatus.IN_PROGRESS];
 
     let tournament = await this.prisma.tournament.findFirst({
       where: {
         ...(tournamentId ? { id: tournamentId } : {}),
         status: {
-          in: [
-            expectedStatus,
-            ...(phase === 'FORMAT' ? [TournamentStatus.LOBBY] : []),
-          ],
+          in: expectedStatuses,
         },
       },
       include: {
@@ -647,6 +685,20 @@ export class TournamentService {
 
     if (!tournament) {
       throw new BadRequestError('No hay ninguna votación activa en este momento.');
+    }
+
+    // Auto-update to VOTING_THEME if phase === 'THEME' and status is still VOTING_FORMAT (T40)
+    if (phase === 'THEME' && tournament.status === TournamentStatus.VOTING_FORMAT) {
+      tournament = await this.prisma.tournament.update({
+        where: { id: tournament.id },
+        data: { status: TournamentStatus.VOTING_THEME },
+        include: {
+          participants: {
+            where: { isPresent: true },
+            include: { player: { include: { user: true } } },
+          },
+        },
+      });
     }
 
     // If tournament is in LOBBY but already has >= 4 participants, auto-transition to VOTING_FORMAT (Item 3)
@@ -878,6 +930,20 @@ export class TournamentService {
       throw new BadRequestError('No se encontró un torneo activo para sortear equipos.');
     }
 
+    const existingSession = getActiveDrawSession(tournament.id);
+    if (existingSession && !existingSession.resolvedState.isComplete) {
+      return {
+        tournament,
+        plan: {
+          steps: existingSession.steps,
+          finalAssignments: existingSession.resolvedState.assignments,
+          method: existingSession.resolvedState.method || assignmentMethod,
+          draftOrder: existingSession.resolvedState.draftOrder,
+        },
+        session: existingSession,
+      };
+    }
+
     const participants = tournament.participants;
     if (participants.length < 4) {
       throw new BadRequestError('No se cumple el quórum mínimo de 4 participantes para el sorteo.');
@@ -885,6 +951,7 @@ export class TournamentService {
 
     const mappedParticipants = participants.map((p) => ({
       id: p.id,
+      playerId: p.playerId,
       name: `${p.player.firstName} ${p.player.lastName}`.trim(),
     }));
 
@@ -1393,9 +1460,34 @@ export class TournamentService {
     const updated = await this.prisma.tournament.update({
       where: { id: tournament.id },
       data: { status: TournamentStatus.ABANDONED },
+      include: {
+        participants: {
+          include: { player: true },
+        },
+      },
     });
 
     return { tournament: updated };
+  }
+
+  /**
+   * Retrieves all available theme names, merging default PES 6 themes with admin custom preloads.
+   */
+  getAllAvailableThemeNames(): string[] {
+    const defaultThemes = [
+      'Clásicos PES 6',
+      'Apertura 2006',
+      'Champions (Europa)',
+      'Libertadores (Sudamérica)',
+      'Mundial / Selecciones',
+      ...Object.keys(DEFAULT_THEME_TEAMS),
+    ];
+    const customThemes = Array.from(customPreloadedTeams.keys());
+    return Array.from(new Set([...defaultThemes, ...customThemes]));
+  }
+
+  getThemeVotingOptions(): string[] {
+    return [...this.getAllAvailableThemeNames(), 'random'];
   }
 }
 

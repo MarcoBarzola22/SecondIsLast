@@ -212,8 +212,12 @@ export function VotingView({
     };
   }, [tournamentId, socket]);
 
-  // Auto-close voting session when countdown reaches 0 even if votes are missing (T29)
+  // Auto-close voting session when countdown reaches 0 even if votes are missing (T29, T38)
   useEffect(() => {
+    if (!expiresAt) return;
+    const expiryMs = Date.parse(expiresAt);
+    if (isNaN(expiryMs) || expiryMs > Date.now()) return;
+
     if (countdown.isExpired && !voteResult && (tournamentId || expiresAt)) {
       const closeVotingFallback = async () => {
         try {
@@ -237,29 +241,40 @@ export function VotingView({
     }
   }, [countdown.isExpired, voteResult, tournamentId, expiresAt]);
 
-  // Trigger phase advance to Equipos/Temática (T32: Autonomía total)
+  // Trigger phase advance to Equipos/Temática (T32, T38: Autonomía total)
   const handleAdvancePhase = useCallback(async () => {
     if (isAdvancingPhase) return;
     try {
       setIsAdvancingPhase(true);
       setError(null);
-      const res = await fetch('/api/tournaments/advance-phase', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ tournamentId, targetStatus: 'VOTING_THEME' }),
-        credentials: 'include',
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Error al avanzar a la siguiente fase.');
+      if (voteResult?.phase === 'FORMAT') {
+        await fetch('/api/tournaments/start-voting', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ tournamentId, phase: 'THEME' }),
+          credentials: 'include',
+        });
+      } else {
+        await fetch('/api/tournaments/advance-phase', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ tournamentId, targetStatus: 'VOTING_THEME' }),
+          credentials: 'include',
+        });
+        await fetch('/api/tournaments/start-voting', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ tournamentId, phase: 'ASSIGNMENT_METHOD' }),
+          credentials: 'include',
+        });
+        onProceedNext?.();
       }
-      onProceedNext?.();
     } catch (err: any) {
       setError(err.message || 'Error al avanzar a la siguiente fase.');
     } finally {
       setIsAdvancingPhase(false);
     }
-  }, [isAdvancingPhase, tournamentId, onProceedNext]);
+  }, [isAdvancingPhase, tournamentId, voteResult?.phase, onProceedNext]);
 
   // Explicit submit vote to server (Item 2)
   const handleConfirmVote = useCallback(
@@ -393,24 +408,26 @@ export function VotingView({
 
             <div className="space-y-1.5">
               <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground font-mono">
-                Formato Electo para la Juntada
+                {voteResult.phase === 'FORMAT' ? 'Formato Electo para la Juntada' : 'Temática Electa para la Juntada'}
               </span>
               <h3 className="font-display text-2xl sm:text-3xl font-black text-foreground text-glow uppercase">
-                {formatWinnerName}
+                {voteResult.phase === 'FORMAT' ? formatWinnerName : (FORMAT_METADATA[voteResult.winner.toLowerCase()]?.title || voteResult.winner)}
               </h3>
-              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-secondary/80 border border-border text-xs font-semibold text-foreground mt-2">
-                {voteResult.matchFormat === 'TWO_LEGGED' ? (
-                  <>
-                    <span className="text-accent text-sm">🔄</span>
-                    <span className="text-accent font-bold">Modalidad: Ida y Vuelta (Series de 2)</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="text-primary text-sm">⚽</span>
-                    <span className="text-primary font-bold">Modalidad: Partido Único (90 min)</span>
-                  </>
-                )}
-              </div>
+              {voteResult.phase === 'FORMAT' && voteResult.matchFormat && (
+                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-secondary/80 border border-border text-xs font-semibold text-foreground mt-2">
+                  {voteResult.matchFormat === 'TWO_LEGGED' ? (
+                    <>
+                      <span className="text-accent text-sm">🔄</span>
+                      <span className="text-accent font-bold">Modalidad: Ida y Vuelta (Series de 2)</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-primary text-sm">⚽</span>
+                      <span className="text-primary font-bold">Modalidad: Partido Único (90 min)</span>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Tie-break Alert (RF-101) */}
@@ -454,13 +471,24 @@ export function VotingView({
 
             {/* Advance Control (T32: Autonomía total de participantes) */}
             <div className="pt-4 flex flex-col items-center justify-center gap-2">
+              <p className="text-xs text-primary font-mono animate-pulse">
+                {voteResult.phase === 'FORMAT'
+                  ? '⏳ Pasando automáticamente a la Votación de Temática en 4 segundos...'
+                  : '⏳ Pasando automáticamente a la Votación de Asignación en 4 segundos...'}
+              </p>
               <PrimaryButton
                 type="button"
                 disabled={isAdvancingPhase}
                 onClick={handleAdvancePhase}
-                className="w-full sm:w-auto px-8 glow-green font-bold uppercase tracking-wider text-sm py-3"
+                className="w-full sm:w-auto px-8 glow-green font-bold uppercase tracking-wider text-sm py-2.5"
               >
-                <span>{isAdvancingPhase ? 'Avanzando a Equipos...' : 'Continuar a Equipos'}</span>
+                <span>
+                  {isAdvancingPhase
+                    ? 'Avanzando...'
+                    : voteResult.phase === 'FORMAT'
+                    ? 'Continuar a Temática'
+                    : 'Continuar a Asignación'}
+                </span>
                 <ArrowRight className="h-4 w-4 ml-1.5" />
               </PrimaryButton>
             </div>

@@ -477,13 +477,29 @@ export class HistoryService {
 
     // 5. Broadcast tournament:finished via WebSocket
     if (io) {
-      io.to(`tournament:${tournament.id}`).emit('tournament:finished', {
+      const champPlayer = participants.find((p) => p.playerId === podium.champion)?.player;
+      const runnerPlayer = participants.find((p) => p.playerId === podium.runnerUp)?.player;
+      const thirdPlayer = participants.find((p) => p.playerId === podium.third)?.player;
+      const fourthPlayer = participants.find((p) => p.playerId === podium.fourth)?.player;
+
+      const podiumWithNames = {
+        ...podium,
+        championName: champPlayer ? `${champPlayer.firstName} ${champPlayer.lastName}`.trim() : podium.champion,
+        runnerUpName: runnerPlayer ? `${runnerPlayer.firstName} ${runnerPlayer.lastName}`.trim() : podium.runnerUp,
+        thirdName: thirdPlayer ? `${thirdPlayer.firstName} ${thirdPlayer.lastName}`.trim() : podium.third,
+        fourthName: fourthPlayer ? `${fourthPlayer.firstName} ${fourthPlayer.lastName}`.trim() : podium.fourth,
+      };
+
+      const finishedPayload = {
         tournamentId: tournament.id,
         status: 'COMPLETED',
-        podium,
+        podium: podiumWithNames,
         pointsDistribution,
         winnerId: podium.champion,
-      });
+      };
+
+      io.to(`tournament:${tournament.id}`).emit('tournament:finished', finishedPayload);
+      io.emit('tournament:finished', finishedPayload);
     }
 
     return {

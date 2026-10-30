@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { AlertTriangle, CheckCircle, RotateCcw, Sparkles, Trophy, Hourglass, Send, Loader2, Lock } from 'lucide-react';
 import { formatPlayerName } from '../../domain/players';
+import { calculateSuspensionInfo } from '../../domain/fairPlay';
 import type { MatchScenarioGuidance } from '../../domain/scenarios';
 import type { LeagueMatch, Player, PlayerId } from '../../domain/types';
 import {
@@ -54,6 +55,16 @@ export function LeagueMatchCard({
 
   const isConfirmed = match.confirmed;
   const isComplete = match.scoreA !== null && match.scoreB !== null;
+
+  const suspA = activeTournament?.suspensions?.[match.playerA];
+  const yCardsA = suspA?.yellowAccumulated ?? (playerA?.pendingYellowCards ?? 0);
+  const rCardsA = suspA?.redPending ?? (playerA?.pendingRedCards ?? 0);
+  const suspInfoA = calculateSuspensionInfo(yCardsA, rCardsA);
+
+  const suspB = activeTournament?.suspensions?.[match.playerB];
+  const yCardsB = suspB?.yellowAccumulated ?? (playerB?.pendingYellowCards ?? 0);
+  const rCardsB = suspB?.redPending ?? (playerB?.pendingRedCards ?? 0);
+  const suspInfoB = calculateSuspensionInfo(yCardsB, rCardsB);
 
   const currentUserId = user?.playerId;
   const matchStatus = match.status || (isConfirmed ? 'CLOSED' : 'PENDING_SUBMISSION');
@@ -371,7 +382,7 @@ export function LeagueMatchCard({
 
       {/* Participante A (Local) */}
       <div
-        className={`flex items-center justify-between gap-2 px-3 py-2 transition ${
+        className={`flex flex-col gap-1 px-3 py-2 transition ${
           isWalkoverA
             ? 'bg-destructive/10'
             : isWinnerA
@@ -379,28 +390,49 @@ export function LeagueMatchCard({
               : 'bg-background/40'
         }`}
       >
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <p
-              className={`truncate text-sm font-semibold ${
-                isWalkoverA
-                  ? 'text-destructive line-through'
-                  : isWinnerA
-                    ? 'text-primary'
-                    : 'text-foreground'
-              }`}
-            >
-              {nameA}
-            </p>
-            {isWalkoverA && (
-              <span className="rounded bg-destructive/20 border border-destructive/50 px-1 py-0.2 text-[9px] font-black uppercase text-destructive">
-                W.O.
-              </span>
-            )}
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <p
+                className={`truncate text-sm font-semibold ${
+                  isWalkoverA
+                    ? 'text-destructive line-through'
+                    : isWinnerA
+                      ? 'text-primary'
+                      : 'text-foreground'
+                }`}
+              >
+                {nameA}
+              </p>
+              {!isConfirmed && !isWalkoverA && (suspInfoA.yellowCycle > 0 || suspInfoA.yellowAccumulated >= 4) && (
+                <span
+                  className="rounded border border-amber-500/40 bg-amber-500/20 px-1 py-0.2 font-display text-[9px] font-bold text-amber-300"
+                  title="Amarillas acumuladas hacia la próxima sanción"
+                >
+                  🟨 {suspInfoA.yellowCycle > 0 ? `${suspInfoA.yellowCycle}/4` : '4/4'}
+                </span>
+              )}
+              {isWalkoverA && (
+                <span className="rounded bg-destructive/20 border border-destructive/50 px-1 py-0.2 text-[9px] font-black uppercase text-destructive">
+                  W.O.
+                </span>
+              )}
+            </div>
+            <p className="truncate text-xs text-muted-foreground">{teamA}</p>
           </div>
-          <p className="truncate text-xs text-muted-foreground">{teamA}</p>
+          {isWinnerA && <Trophy className="h-4 w-4 shrink-0 text-primary glow-green" />}
         </div>
-        {isWinnerA && <Trophy className="h-4 w-4 shrink-0 text-primary glow-green" />}
+
+        {/* Banner de Sanción Disciplinaria A (RF-Sanciones) */}
+        {!isConfirmed && !isWalkoverA && suspInfoA.isSuspended && (
+          <div className="mt-0.5 flex items-center gap-1 rounded border border-amber-400/60 bg-destructive/20 px-2 py-0.5 text-[11px] font-bold text-amber-300 shadow-sm animate-pulse">
+            <AlertTriangle className="h-3 w-3 shrink-0 text-destructive" />
+            <span>
+              🚨 SANCIONADO: {suspInfoA.suspendedCount === 1 ? 'Su MEJOR JUGADOR' : `Sus ${suspInfoA.suspendedCount} MEJORES JUGADORES`}{' '}
+              no {suspInfoA.suspendedCount === 1 ? 'puede' : 'pueden'} jugar este partido ({suspInfoA.motivo})
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Inputs de goles y tarjetas */}
@@ -507,7 +539,7 @@ export function LeagueMatchCard({
 
       {/* Participante B (Visitante) */}
       <div
-        className={`flex items-center justify-between gap-2 px-3 py-2 transition ${
+        className={`flex flex-col gap-1 px-3 py-2 transition ${
           isWalkoverB
             ? 'bg-destructive/10'
             : isWinnerB
@@ -515,28 +547,49 @@ export function LeagueMatchCard({
               : 'bg-background/40'
         }`}
       >
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <p
-              className={`truncate text-sm font-semibold ${
-                isWalkoverB
-                  ? 'text-destructive line-through'
-                  : isWinnerB
-                    ? 'text-primary'
-                    : 'text-foreground'
-              }`}
-            >
-              {nameB}
-            </p>
-            {isWalkoverB && (
-              <span className="rounded bg-destructive/20 border border-destructive/50 px-1 py-0.2 text-[9px] font-black uppercase text-destructive">
-                W.O.
-              </span>
-            )}
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <p
+                className={`truncate text-sm font-semibold ${
+                  isWalkoverB
+                    ? 'text-destructive line-through'
+                    : isWinnerB
+                      ? 'text-primary'
+                      : 'text-foreground'
+                }`}
+              >
+                {nameB}
+              </p>
+              {!isConfirmed && !isWalkoverB && (suspInfoB.yellowCycle > 0 || suspInfoB.yellowAccumulated >= 4) && (
+                <span
+                  className="rounded border border-amber-500/40 bg-amber-500/20 px-1 py-0.2 font-display text-[9px] font-bold text-amber-300"
+                  title="Amarillas acumuladas hacia la próxima sanción"
+                >
+                  🟨 {suspInfoB.yellowCycle > 0 ? `${suspInfoB.yellowCycle}/4` : '4/4'}
+                </span>
+              )}
+              {isWalkoverB && (
+                <span className="rounded bg-destructive/20 border border-destructive/50 px-1 py-0.2 text-[9px] font-black uppercase text-destructive">
+                  W.O.
+                </span>
+              )}
+            </div>
+            <p className="truncate text-xs text-muted-foreground">{teamB}</p>
           </div>
-          <p className="truncate text-xs text-muted-foreground">{teamB}</p>
+          {isWinnerB && <Trophy className="h-4 w-4 shrink-0 text-primary glow-green" />}
         </div>
-        {isWinnerB && <Trophy className="h-4 w-4 shrink-0 text-primary glow-green" />}
+
+        {/* Banner de Sanción Disciplinaria B (RF-Sanciones) */}
+        {!isConfirmed && !isWalkoverB && suspInfoB.isSuspended && (
+          <div className="mt-0.5 flex items-center gap-1 rounded border border-amber-400/60 bg-destructive/20 px-2 py-0.5 text-[11px] font-bold text-amber-300 shadow-sm animate-pulse">
+            <AlertTriangle className="h-3 w-3 shrink-0 text-destructive" />
+            <span>
+              🚨 SANCIONADO: {suspInfoB.suspendedCount === 1 ? 'Su MEJOR JUGADOR' : `Sus ${suspInfoB.suspendedCount} MEJORES JUGADORES`}{' '}
+              no {suspInfoB.suspendedCount === 1 ? 'puede' : 'pueden'} jugar este partido ({suspInfoB.motivo})
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Botón de acción */}

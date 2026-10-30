@@ -127,6 +127,7 @@ export type Action =
       match?: any;
       bracket?: any[];
       unblockedParticipants?: string[];
+      suspensions?: Record<string, { suspendedCount: number; yellowAccumulated: number; redPending: number }>;
     }
   | {
       type: 'HYDRATE_TOURNAMENT';

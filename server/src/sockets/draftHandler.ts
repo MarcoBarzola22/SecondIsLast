@@ -276,9 +276,15 @@ async function advanceDraftTurn(
   const nextIndex = session.currentTurnIndex + 1;
 
   if (nextIndex >= session.draftOrder.length) {
+    if (session.isComplete) {
+      return session;
+    }
     // Draft completed!
     session.isComplete = true;
-    session.timer = undefined;
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = undefined;
+    }
 
     if (io) {
       const { chosenTeamsByPlayerId, chosenTeamsByParticipantName } = buildDraftPayloadExtras(session);
@@ -292,11 +298,32 @@ async function advanceDraftTurn(
       io.emit('draft:completed', completedPayload);
     }
 
-    // Auto-generate fixture
+    // Advance to BRACKET_METHOD if knockout or auto-generate fixture (T45)
     try {
-      await tournamentService.generateRelationalFixture(session.tournamentId, io);
+      const tourney = await prisma.tournament.findUnique({
+        where: { id: session.tournamentId },
+        include: { participants: { where: { isPresent: true } } },
+      });
+      const isKnockout =
+        tourney?.format === 'BRACKET' ||
+        tourney?.format === 'DOUBLE_ELIMINATION';
+
+      if (isKnockout && io) {
+        const { startVotingSession } = await import('./votingHandler.js');
+        startVotingSession(
+          io,
+          session.tournamentId,
+          'BRACKET_METHOD',
+          ['DIRECT_MATCHUP_DRAW', 'PICK_BRACKET_SLOT'],
+          session.draftOrder.length,
+          60,
+          prisma
+        );
+      } else {
+        await tournamentService.generateRelationalFixture(session.tournamentId, io);
+      }
     } catch (err) {
-      console.error('[DraftHandler] Error generating fixture after draft complete:', err);
+      console.error('[DraftHandler] Error advancing after draft complete:', err);
     }
 
     return session;
@@ -401,13 +428,14 @@ export async function getOrRecoverDraftSession(
 
   // Find first unassigned
   const firstUnassignedIdx = tourney.participants.findIndex((p) => !p.teamName);
-  const isComplete = firstUnassignedIdx === -1;
+  const isAllAssigned = tourney.participants.length > 0 && tourney.participants.every((p) => p.teamName !== null);
+  const isComplete = tourney.status === 'IN_PROGRESS' || isAllAssigned || firstUnassignedIdx === -1;
   const currentTurnIndex = isComplete ? tourney.participants.length : firstUnassignedIdx;
   const currentParticipant = draftOrder[currentTurnIndex] || draftOrder[0];
 
   const durationSeconds = 20;
   const expiresAtMs = Date.now() + durationSeconds * 1000;
-  const expiresAt = new Date(expiresAtMs).toISOString();
+  const expiresAt = isComplete ? '' : new Date(expiresAtMs).toISOString();
 
   const session: ActiveDraftSession = {
     tournamentId,
@@ -420,7 +448,7 @@ export async function getOrRecoverDraftSession(
     currentPlayerId: currentParticipant?.playerId || '',
     currentParticipantName: currentParticipant?.participantName || '',
     expiresAt,
-    expiresAtMs,
+    expiresAtMs: isComplete ? 0 : expiresAtMs,
     isComplete,
   };
 

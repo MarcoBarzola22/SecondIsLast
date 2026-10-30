@@ -267,6 +267,57 @@
   - Cubre: RF-99, RF-100, RF-101, RF-103.  
   - Hecho cuando: `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites completas de frontend (385 tests) y server (148 tests) pasan 100% en verde.
 
+- [x] **T44 · Pulido Final Bloque 1: Simplificación del Header, Notificación No Intrusiva y Gestión Persistente de Temáticas y Equipos por Admin**  
+  1. **Simplificación del Header y Notificación No Intrusiva (`Header.tsx`, `App.tsx`):**  
+     - Reemplazo de navegación repetida por 3 pestañas principales: `Torneo`, `Tabla y Perfiles`, `Reglamento`, más botón `Admin` exclusivo para administradores.  
+     - Prohibición de sacar automáticamente al usuario de `tabla` o `reglamento` en eventos de socket, alertando en su lugar con titileo luminoso (`animate-pulse`) y badge de torneo activo en la pestaña `Torneo`.  
+  2. **Panel de Admin: Gestión Persistente de Temáticas y Equipos (`WhitelistModal.tsx`, `schema.prisma`, `tournaments.ts`, `tournamentService.ts`):**  
+     - Pestaña de `Temáticas y Equipos` en el modal de administración, permitiendo crear, editar y eliminar temáticas personalizadas con sus respectivos equipos en PostgreSQL.  
+  - Cubre: RF-57, RF-58, RF-59, RF-60, RF-88, RF-91, RF-94, RF-118, RF-119.  
+  - Hecho cuando: `npx prisma db push` actualiza PostgreSQL, `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites de tests pasan 100% en verde.
+
+- [x] **T45 · Pulido Final Bloque 2: Votaciones Especiales por Formato y Eliminación de Armado Manual Libre**  
+  1. **Eliminar `ManualMatchupsPanel` de Todas las Vistas (`BracketView.tsx` y `DoubleEliminationView.tsx`):**  
+     - Eliminación completa de la importación y renderizado de `ManualMatchupsPanel`. Los cruces no pueden modificarse fuera del flujo deportivo/sorteo oficial.  
+  2. **Formato `Liga + Reducido` (`LEAGUE_PLAYOFFS`): Votación de Clasificados y Cruces Disparejos (`schema.prisma`, `votingHandler.ts`, `VotingView.tsx`, `fixture.ts`, `matchService.ts`):**  
+     - Nueva fase en enum `VotePhase.PLAYOFF_SPOTS` (60s) tras ganar `league_playoffs`: votación dinámica de cuántos clasifican al Reducido Final (`2` hasta `N - 1` más opción `'random'`), persistiendo `qualifyingSpots` en `tournament.settings` y encadenando con `THEME`.  
+     - En `fixture.ts` (`buildPlayoffMatchesFromQualified`) y `matchService.ts`: generación automática de llaves del Reducido al cerrar la fase regular de liga. Si $K$ es impar o no potencia de 2, los últimos clasificados juegan los partidos extra preliminares ($K=3$: $2^\circ$ vs $3^\circ$ esperando $1^\circ$ en Final; $K=5$: $4^\circ$ vs $5^\circ$ y $2^\circ$ vs $3^\circ$; $K=6$: repechajes $4^\circ$ vs $5^\circ$ y $3^\circ$ vs $6^\circ$).  
+  3. **Votación de Armado de Llaves (`BRACKET_METHOD`) y Selector de Casilleros (`bracketSlotHandler.ts`, `BracketSlotPickerView.tsx`, `fixture.ts`):**  
+     - Nueva fase en enum `VotePhase.BRACKET_METHOD` (60s) para `BRACKET` y `DOUBLE_ELIMINATION` una vez asignados todos los equipos: `'DIRECT_MATCHUP_DRAW'` ("🎲 Sorteo de Enfrentamientos") vs `'PICK_BRACKET_SLOT'` ("📋 Elegir Ubicación en la Llave por Orden").  
+     - Vista interactiva `BracketSlotPickerView.tsx` y handler de sockets `bracketSlotHandler.ts`: ruleta sorteando orden de turnos, banner sincronizado con timer de 20s por jugador, selección de casilleros de 1ra ronda ("cuadraditos") y auto-pick por timeout.  
+     - En `fixture.ts`: soporte para `isPreSeeded: true` en `buildBracketSeries` y `buildDoubleEliminationSeries` para respetar exactamente el orden de casilleros elegido por los participantes antes de emitir `fixture:ready`.  
+  - Cubre: RF-86, RF-87, RF-99, RF-100, RF-101, RF-103, RF-104, RF-113, RF-118, RF-119.  
+  - Hecho cuando: `npx prisma db push` actualiza PostgreSQL con `PLAYOFF_SPOTS` y `BRACKET_METHOD`, `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites de tests de frontend (385 tests) y backend (148 tests) pasan 100% en verde.
+
+- [x] **T46 · Pulido Final Bloque 3: Sistema de Sanciones Disciplinarias Acumulativas por Tarjetas Amarillas y Rojas**  
+  1. **Persistencia en Base de Datos (`schema.prisma`):**  
+     - Agregados campos de disciplina activa en el modelo `Player`: `pendingYellowCards Int @default(0)` y `pendingRedCards Int @default(0)`. Sincronizado en PostgreSQL con `npx prisma db push`.  
+  2. **Reglas de Negocio Estrictas y Purga Automática al Confirmar Partido (`matchService.ts`, `tournamentService.ts`):**  
+     - Acumulación permanente intra e inter-torneo: las tarjetas amarillas y rojas no se borran al terminar un torneo.  
+     - Al confirmar y cerrar un partido no-bye en `matchService.confirmMatch`: se descuenta la sanción cumplida en ese partido (`pendingYellowCards % 4`, `pendingRedCards = 0`) y se suman inmediatamente las nuevas tarjetas recibidas en el partido recién cerrado (`nextPendingYellows = remainingYellows + matchYellows`, `nextPendingReds = remainingReds + matchReds`), actualizando PostgreSQL.  
+     - En `tournamentService.getActiveTournament`, `fixture:ready` y `match:closed`: propagación de los campos disciplinarios del jugador y mapa `suspensions` con `suspendedCount = Math.floor(pendingYellowCards / 4) + pendingRedCards`.  
+  3. **Alerta Visual en Tarjetas de Partido (`SeriesCard.tsx`, `LeagueMatchCard.tsx`, `fairPlay.ts`, `reducer.ts`):**  
+     - En `SeriesCard.tsx` y `LeagueMatchCard.tsx`: para partidos no cerrados (`!confirmed`), visualización de badge de amarillas acumuladas al lado del nombre (ej. `🟨 3/4` o `🟨 4/4`).  
+     - Si `suspendedCount >= 1`: visualización de banner/badge de alerta rojo y amarillo muy visible (`animate-pulse`) indicando "🚨 SANCIONADO: Su MEJOR JUGADOR no puede jugar este partido" (o "Sus N MEJORES JUGADORES") especificando el motivo exacto (ej. "4 Amarillas acumuladas" o "1 Tarjeta Roja").  
+  - Cubre: RF-61, RF-62, RF-88, RF-105, RF-107, RF-108, RF-110, RF-112, RF-118, RF-Sanciones.  
+  - Hecho cuando: `npx prisma db push` actualiza PostgreSQL, `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites de tests de frontend (391 tests) y backend (149 tests) pasan 100% en verde.
+
+- [x] **T47 · Pulido Final Bloque 4: Renovación Completa de Tabla y Perfiles, Duelos Directos y Ficha del Jugador**  
+  1. **Limpieza de Pestañas y Reset Administrador (`StandingsView.tsx`, `history.ts`):**  
+     - Eliminada pestaña redundante "Tabla General" y botón de lobby. Pestaña principal por defecto `Tabla Anual` con selector de año (`all` / todos los años e históricos).  
+     - Botón "Resetear Historial" exclusivo para `isAdmin` con confirmación, conectado al endpoint seguro `DELETE /api/history/reset` que limpia `HistoricalStats`, `HeadToHeadRecord`, `AnnualRankingEntry` y torneos completados en PostgreSQL.  
+  2. **Duelos Directos (Mano a Mano / H2H) Conectados a PostgreSQL (`historyService.ts`, `routes/history.ts`, `StandingsView.tsx`):**  
+     - Endpoints `GET /api/history/players` y `GET /api/history/h2h`, alimentando los selectores con jugadores persistidos y seleccionando automáticamente los primeros dos jugadores.  
+     - Cálculo y comparativa visual doble: partidos individuales totales (PJ, PG, PE, PP, GF, GC) y "Paternidad en Mano a Mano" (series eliminatorias jugadas/ganadas/perdidas y definiciones por penales).  
+     - Desglose cronológico completo de cruces históricos (`encountersHistory`) con nombre del torneo, fecha, instancia (Final 🏆, SF, etc.), equipos utilizados y resultado.  
+  3. **Nueva Pestaña "Perfiles de Jugadores" (`StandingsView.tsx`, `historyService.ts`):**  
+     - Ficha de carrera completa accesible por selector o haciendo clic directo sobre el nombre de cualquier jugador en la Tabla Anual.  
+     - Resumen de carrera (torneos jugados, títulos 🏆, subcampeonatos 🥈, 3° puestos 🥉, % efectividad y de campeonatos), especialista en Mano a Mano (% efectividad en series y en penales), estadísticas de partidos (PJ, PG, PE, PP, GF, GC, DG, TA, TR), estado disciplinario actual (amarillas y rojas pendientes, suspensión activa) y lista histórica de equipos utilizados y posiciones obtenidas.  
+  - Cubre: RF-34, RF-76, RF-77, RF-78, RF-79, RF-88, RF-110, RF-118, RF-Sanciones.  
+  - Hecho cuando: `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites de tests de frontend (391 tests) y backend (153 tests) pasan 100% en verde.
+
+
+
 
 
 

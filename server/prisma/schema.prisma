@@ -42,8 +42,10 @@ enum MatchStatus {
 
 enum VotePhase {
   FORMAT
+  PLAYOFF_SPOTS
   THEME
   ASSIGNMENT_METHOD
+  BRACKET_METHOD
 }
 
 model User {
@@ -68,10 +70,12 @@ model WhitelistEntry {
 }
 
 model Player {
-  id             String                  @id @default(uuid())
-  firstName      String
-  lastName       String
-  user           User?
+  id                 String                  @id @default(uuid())
+  firstName          String
+  lastName           String
+  pendingYellowCards Int                     @default(0)
+  pendingRedCards    Int                     @default(0)
+  user               User?
   participants   TournamentParticipant[]
   h2hAsPlayerA   HeadToHeadRecord[]      @relation("PlayerA")
   h2hAsPlayerB   HeadToHeadRecord[]      @relation("PlayerB")
@@ -218,3 +222,12 @@ model AnnualRankingEntry {
 
   @@unique([year, playerId])
 }
+
+model CustomTheme {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  teams     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+

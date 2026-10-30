@@ -1,12 +1,8 @@
 import { useState } from 'react';
 import {
   Gamepad2,
-  Users,
-  Dices,
-  Shuffle,
   Trophy,
   ListOrdered,
-  Layers,
   LogOut,
   User as UserIcon,
   ShieldCheck,
@@ -28,6 +24,7 @@ export type ViewType =
   | 'registro'
   | 'tematica'
   | 'draft'
+  | 'bracket_slots'
   | 'bracket'
   | 'league'
   | 'group_stage'
@@ -39,9 +36,15 @@ interface HeaderProps {
   currentView: ViewType;
   onNavigate: (view: ViewType) => void;
   cloudTournament?: any;
+  hasActiveTournamentAlert?: boolean;
 }
 
-export function Header({ currentView, onNavigate, cloudTournament }: HeaderProps) {
+export function Header({
+  currentView,
+  onNavigate,
+  cloudTournament,
+  hasActiveTournamentAlert,
+}: HeaderProps) {
   const { activeTournament } = useAppState();
   const dispatch = useAppDispatch();
   const { user, displayName, isAdmin, isLoading, loginWithGoogle, devLogin, logout } = useAuth();
@@ -50,54 +53,11 @@ export function Header({ currentView, onNavigate, cloudTournament }: HeaderProps
   const [isDevMenuOpen, setIsDevMenuOpen] = useState(false);
   const [customDevEmail, setCustomDevEmail] = useState('');
 
-  const isDoubleElimination =
-    activeTournament?.tournamentType === 'double_elimination';
-  const isLeague =
-    activeTournament?.tournamentType === 'league' ||
-    activeTournament?.tournamentType === 'league_playoffs';
-  const isGroupStage = activeTournament?.tournamentType === 'group_stage';
-
-  const competitionStepId: ViewType = isDoubleElimination
-    ? 'double_elimination'
-    : isGroupStage
-    ? 'group_stage'
-    : isLeague
-    ? 'league'
-    : 'bracket';
-
-  const competitionStepLabel = isDoubleElimination
-    ? 'Doble Eliminación'
-    : isGroupStage
-    ? 'Grupos'
-    : activeTournament?.tournamentType === 'league_playoffs'
-    ? 'Liga + Reducido'
-    : isLeague
-    ? 'Liga'
-    : 'Llaves';
-
-  const competitionStepIcon = isDoubleElimination
-    ? Trophy
-    : isGroupStage
-    ? Layers
-    : isLeague
-    ? ListOrdered
-    : Trophy;
-
-  const steps: Array<{
-    id: ViewType;
-    label: string;
-    icon: typeof Users;
-  }> = [
-    { id: 'lobby', label: 'Lobby', icon: Users },
-    { id: 'votacion', label: 'Votación', icon: Dices },
-    { id: 'equipos', label: 'Temática / Equipos', icon: Shuffle },
-    {
-      id: competitionStepId,
-      label: competitionStepLabel,
-      icon: competitionStepIcon,
-    },
-    { id: 'tabla', label: 'Tabla', icon: ListOrdered },
-  ];
+  const isTournamentView = !['tabla', 'reglamento'].includes(currentView);
+  const hasAlert =
+    (currentView === 'tabla' || currentView === 'reglamento') &&
+    Boolean(hasActiveTournamentAlert ?? (cloudTournament || activeTournament));
+  const alertBadge = cloudTournament?.status === 'LOBBY' ? '🔴 ¡Lobby Abierto!' : '🔴 ¡Torneo Activo!';
 
   const handleAbandon = async () => {
     const confirmed = window.confirm(
@@ -119,83 +79,6 @@ export function Header({ currentView, onNavigate, cloudTournament }: HeaderProps
     saveOfflineTournament(null);
     dispatch({ type: 'TOURNAMENT_ABANDONED' });
     onNavigate('lobby');
-  };
-
-  const isStepEnabled = (stepId: ViewType): boolean => {
-    // Lobby, Tabla, and Reglamento are ALWAYS accessible
-    if (
-      stepId === 'lobby' ||
-      stepId === 'tabla' ||
-      stepId === 'reglamento'
-    )
-      return true;
-
-    // Votación is ONLY accessible when a cloudTournament is in VOTING_FORMAT or later
-    if (stepId === 'votacion') {
-      const status = cloudTournament?.status;
-      return (
-        status === 'VOTING_FORMAT' ||
-        status === 'VOTING_THEME' ||
-        status === 'IN_PROGRESS'
-      );
-    }
-
-    if (!activeTournament) {
-      return false;
-    }
-
-    if (stepId === 'equipos' || stepId === 'tematica') {
-      return (
-        activeTournament.phase === 'theme' ||
-        activeTournament.phase === 'draft' ||
-        activeTournament.phase === 'bracket' ||
-        activeTournament.phase === 'league' ||
-        activeTournament.phase === 'group_stage' ||
-        activeTournament.phase === 'group_playoffs' ||
-        activeTournament.phase === 'league_playoffs' ||
-        activeTournament.phase === 'double_elimination'
-      );
-    }
-
-    if (stepId === 'draft') {
-      return (
-        activeTournament.phase === 'draft' ||
-        activeTournament.phase === 'bracket' ||
-        activeTournament.phase === 'league' ||
-        activeTournament.phase === 'group_stage' ||
-        activeTournament.phase === 'group_playoffs' ||
-        activeTournament.phase === 'league_playoffs' ||
-        activeTournament.phase === 'double_elimination'
-      );
-    }
-
-    if (stepId === 'bracket') {
-      return (
-        activeTournament.phase === 'bracket' ||
-        activeTournament.phase === 'group_playoffs' ||
-        activeTournament.phase === 'league_playoffs'
-      );
-    }
-
-    if (stepId === 'league') {
-      return (
-        activeTournament.phase === 'league' ||
-        activeTournament.phase === 'league_playoffs'
-      );
-    }
-
-    if (stepId === 'group_stage') {
-      return (
-        activeTournament.phase === 'group_stage' ||
-        activeTournament.phase === 'group_playoffs'
-      );
-    }
-
-    if (stepId === 'double_elimination') {
-      return activeTournament.phase === 'double_elimination';
-    }
-
-    return false;
   };
 
   const pointsDist =
@@ -242,35 +125,60 @@ export function Header({ currentView, onNavigate, cloudTournament }: HeaderProps
         </div>
 
         <div className="flex flex-wrap items-center justify-center gap-2">
-          {/* Lobby Online Navigation Button (RF-93, RF-119) */}
-          <button
-            type="button"
-            onClick={() => onNavigate('lobby')}
-            className={`flex items-center gap-1.5 rounded-sm border px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${
-              currentView === 'lobby'
-                ? 'border-primary bg-primary text-primary-foreground glow-green'
-                : 'border-primary/50 bg-primary/10 hover:bg-primary/25 text-primary'
-            }`}
-            title="Lobby de Asistencia y Quórum en Vivo"
-          >
-            <Users className="h-3.5 w-3.5" />
-            <span>Lobby</span>
-          </button>
+          {/* Main 3 Clean Tabs Navigation */}
+          <nav className="flex flex-wrap items-center justify-center gap-1.5">
+            {/* Tab 1: Torneo */}
+            <button
+              type="button"
+              onClick={() => onNavigate('lobby')}
+              className={`flex items-center gap-1.5 rounded-sm border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${
+                isTournamentView
+                  ? 'border-primary bg-primary text-primary-foreground glow-green'
+                  : hasAlert
+                  ? 'animate-pulse border-primary bg-primary/20 text-primary shadow-[0_0_15px_rgba(34,197,94,0.4)] hover:bg-primary/30'
+                  : 'border-border bg-secondary text-muted-foreground hover:border-accent hover:text-accent'
+              }`}
+              title="Flujo activo del torneo (Lobby, Votaciones, Equipos, Draft y Fixture)"
+            >
+              <Trophy className="h-3.5 w-3.5" />
+              <span>Torneo</span>
+              {hasAlert && (
+                <span className="ml-1 rounded-full bg-primary/30 border border-primary/50 px-1.5 py-0.5 text-[10px] font-bold text-primary animate-pulse">
+                  {alertBadge}
+                </span>
+              )}
+            </button>
 
-          {/* Reglamento Oficial de la Casa (RF-118, RF-119) */}
-          <button
-            type="button"
-            onClick={() => onNavigate('reglamento')}
-            className={`flex items-center gap-1.5 rounded-sm border px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${
-              currentView === 'reglamento'
-                ? 'border-primary bg-primary text-primary-foreground glow-green'
-                : 'border-border/80 bg-secondary/70 hover:bg-secondary text-foreground hover:border-accent hover:text-accent'
-            }`}
-            title="Reglamento Oficial de la Casa (Código de Honor)"
-          >
-            <BookOpen className="h-3.5 w-3.5 text-accent" />
-            <span>Reglamento</span>
-          </button>
+            {/* Tab 2: Tabla y Perfiles */}
+            <button
+              type="button"
+              onClick={() => onNavigate('tabla')}
+              className={`flex items-center gap-1.5 rounded-sm border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${
+                currentView === 'tabla'
+                  ? 'border-primary bg-primary text-primary-foreground glow-green'
+                  : 'border-border bg-secondary text-muted-foreground hover:border-accent hover:text-accent'
+              }`}
+              title="Tabla de posiciones históricas, récords y perfiles de jugadores"
+            >
+              <ListOrdered className="h-3.5 w-3.5" />
+              <span>Tabla y Perfiles</span>
+            </button>
+
+            {/* Tab 3: Reglamento */}
+            <button
+              type="button"
+              onClick={() => onNavigate('reglamento')}
+              className={`flex items-center gap-1.5 rounded-sm border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${
+                currentView === 'reglamento'
+                  ? 'border-primary bg-primary text-primary-foreground glow-green'
+                  : 'border-border bg-secondary text-muted-foreground hover:border-accent hover:text-accent'
+              }`}
+              title="Reglamento Oficial de la Casa (Código de Honor)"
+            >
+              <BookOpen className="h-3.5 w-3.5 text-accent" />
+              <span>Reglamento</span>
+            </button>
+          </nav>
 
           {/* Dev-Login Quick Switcher (DEV Only DX) */}
           {import.meta.env.DEV && (
@@ -417,37 +325,6 @@ export function Header({ currentView, onNavigate, cloudTournament }: HeaderProps
               <span className="hidden sm:inline">Admin</span>
             </button>
           )}
-
-          <nav className="flex flex-wrap justify-center gap-1">
-            {steps.map((s, i) => {
-              const active =
-                s.id === currentView ||
-                (s.id === 'equipos' && (currentView === 'tematica' || currentView === 'draft')) ||
-                (s.id === competitionStepId &&
-                  ['bracket', 'league', 'group_stage', 'double_elimination'].includes(currentView));
-              const enabled = isStepEnabled(s.id);
-
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  disabled={!enabled}
-                  onClick={() => onNavigate(s.id)}
-                  className={`flex items-center gap-2 rounded-sm border px-3 py-2 text-sm font-semibold uppercase tracking-wider transition ${
-                    active
-                      ? 'border-primary bg-primary text-primary-foreground glow-green'
-                      : enabled
-                        ? 'border-border bg-secondary text-muted-foreground hover:border-accent hover:text-accent'
-                        : 'cursor-not-allowed border-border/40 bg-secondary/30 text-muted-foreground/40'
-                  }`}
-                >
-                  <span className="font-display text-xs">{i + 1}</span>
-                  <s.icon className="h-4 w-4" />
-                  <span className="hidden sm:inline">{s.label}</span>
-                </button>
-              );
-            })}
-          </nav>
 
           {isAdmin && (cloudTournament || activeTournament) && (
             <DangerButton onClick={handleAbandon} title="Abandonar o reiniciar torneo activo en cualquier fase">

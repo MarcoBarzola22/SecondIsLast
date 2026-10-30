@@ -827,5 +827,100 @@ describe('Match Submission by Home Player with Penalties & Sequential Lock (T18 
       expect(emitted.bracket).toBeDefined();
       expect(emitted.unblockedParticipants).toBeDefined();
     });
+
+    it('accumulates yellow & red cards on Player and purges served suspensions upon match closing (T46 · RF-Sanciones)', async () => {
+      const matchWithCards = {
+        ...matchPendingConfirmation,
+        homeYellowCards: 1, // Had 3, now gets 1 -> 4 yellow cards (suspended for next match)
+        homeRedCards: 0,
+        awayYellowCards: 0,
+        awayRedCards: 1, // Gets 1 red card -> suspended for next match
+      };
+
+      vi.spyOn(prisma.match, 'findUnique').mockResolvedValue(matchWithCards as any);
+
+      const closedMatch = {
+        ...matchWithCards,
+        status: MatchStatus.CLOSED,
+        version: 3,
+        closedAt: new Date(),
+      };
+
+      const homePlayerMock = {
+        id: 'player-local-id',
+        firstName: 'Jugador',
+        lastName: 'Local',
+        pendingYellowCards: 3, // Already had 3
+        pendingRedCards: 0,
+      };
+
+      const awayPlayerMock = {
+        id: 'player-away-id',
+        firstName: 'Jugador',
+        lastName: 'Visitante',
+        pendingYellowCards: 0,
+        pendingRedCards: 0,
+      };
+
+      const updatedPlayers: Record<string, any> = {};
+
+      const advancedSf1Match = {
+        ...targetSf1Match,
+        homeParticipantId: 'part-home',
+        homeParticipant: matchWithCards.homeParticipant,
+      };
+
+      vi.spyOn(prisma, '$transaction').mockImplementation(async (callback: any) => {
+        const txMock = {
+          match: {
+            updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+            findMany: vi
+              .fn()
+              .mockResolvedValueOnce([matchWithCards])
+              .mockResolvedValueOnce([targetSf1Match])
+              .mockResolvedValueOnce([closedMatch, advancedSf1Match]),
+            update: vi.fn().mockResolvedValue(advancedSf1Match),
+          },
+          player: {
+            findUnique: vi.fn().mockImplementation(async ({ where }: any) => {
+              if (where.id === 'player-local-id') return homePlayerMock;
+              if (where.id === 'player-away-id') return awayPlayerMock;
+              return null;
+            }),
+            update: vi.fn().mockImplementation(async ({ where, data }: any) => {
+              updatedPlayers[where.id] = data;
+              return { id: where.id, ...data };
+            }),
+          },
+          tournament: {
+            findUniqueOrThrow: vi.fn().mockResolvedValue(mockTournament),
+          },
+        };
+        return callback(txMock);
+      });
+
+      const awayToken = createToken(awayUser);
+      const res = await request(app)
+        .post(`/api/matches/${matchId}/confirm`)
+        .set('Authorization', `Bearer ${awayToken}`)
+        .send({ expectedVersion: 2 });
+
+      expect(res.status).toBe(200);
+
+      // Verify Home player reached 4 yellow cards (3 + 1 = 4)
+      expect(updatedPlayers['player-local-id']).toEqual({
+        pendingYellowCards: 4,
+        pendingRedCards: 0,
+      });
+
+      // Verify Away player received 1 red card (0 + 1 = 1)
+      expect(updatedPlayers['player-away-id']).toEqual({
+        pendingYellowCards: 0,
+        pendingRedCards: 1,
+      });
+
+      // Verify suspensions returned in response
+      expect(res.body.suspensions).toBeDefined();
+    });
   });
 });

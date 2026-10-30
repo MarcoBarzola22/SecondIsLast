@@ -7,6 +7,7 @@ import {
   NotFoundError,
   BadRequestError,
   ForbiddenError,
+  cancelPendingFixture,
 } from '../services/tournamentService.js';
 import { broadcastLobbyUpdated, cancelLobbyTimer, getActiveLobbySession } from '../sockets/lobbyHandler.js';
 import {
@@ -16,7 +17,9 @@ import {
   getActiveVotingSession,
   cancelVotingSession,
 } from '../sockets/votingHandler.js';
-import { handleDraftPick, getActiveDraftSession } from '../sockets/draftHandler.js';
+import { handleDraftPick, getActiveDraftSession, clearActiveDraftSessions } from '../sockets/draftHandler.js';
+import { cancelDrawAnimation } from '../sockets/drawHandler.js';
+import { cancelBracketSlotSession, handleBracketSlotPick } from '../sockets/bracketSlotHandler.js';
 import { getSocketServer } from '../sockets/index.js';
 import { Role, TournamentStatus } from '@prisma/client';
 import { prisma } from '../db.js';
@@ -166,6 +169,10 @@ router.post('/abandon', async (req: Request, res: Response) => {
     // Cancel lobby and voting in-memory sessions/timers
     cancelLobbyTimer(tournament.id);
     cancelVotingSession(tournament.id);
+    cancelDrawAnimation(tournament.id);
+    clearActiveDraftSessions();
+    cancelBracketSlotSession(tournament.id);
+    cancelPendingFixture(tournament.id);
 
     // Broadcast WebSocket events to all clients
     const io = getIO(req);
@@ -452,8 +459,9 @@ router.post('/vote', async (req: Request, res: Response) => {
       return;
     }
 
-    const votePhase = phase.toUpperCase() as 'FORMAT' | 'THEME' | 'ASSIGNMENT_METHOD';
-    if (votePhase !== 'FORMAT' && votePhase !== 'THEME' && votePhase !== 'ASSIGNMENT_METHOD') {
+    const validPhases = ['FORMAT', 'PLAYOFF_SPOTS', 'THEME', 'ASSIGNMENT_METHOD', 'BRACKET_METHOD'];
+    const votePhase = phase.toUpperCase() as any;
+    if (!validPhases.includes(votePhase)) {
       res.status(400).json({ error: 'Fase de votación no válida.' });
       return;
     }
@@ -516,7 +524,7 @@ router.post('/vote', async (req: Request, res: Response) => {
           votePhase === 'FORMAT'
             ? getFormatVotingOptions(tourneyInDb.participants.length)
             : votePhase === 'THEME'
-            ? tournamentService.getThemeVotingOptions()
+            ? await tournamentService.getThemeVotingOptions()
             : ['DIRECT_DRAW', 'DRAFT_ORDER'];
 
         session = startVotingSession(
@@ -538,7 +546,7 @@ router.post('/vote', async (req: Request, res: Response) => {
     let normalizedChoice = choice;
 
     if (votePhase === 'THEME') {
-      const allThemeOptions = Array.from(new Set([...session.options, ...tournamentService.getThemeVotingOptions()]));
+      const allThemeOptions = Array.from(new Set([...session.options, ...(await tournamentService.getThemeVotingOptions())]));
       const matched = matchThemeName(choice, allThemeOptions);
       if (matched) {
         isChoiceValid = true;
@@ -687,6 +695,99 @@ router.post('/draft/pick', async (req: Request, res: Response) => {
       return;
     }
     res.status(500).json({ error: error.message || 'Error al elegir equipo en el draft.' });
+  }
+});
+
+/**
+ * POST /api/tournaments/bracket-slots/pick
+ * Allows a participant to choose their bracket slot in the knockout bracket (RF-86, T45).
+ */
+router.post('/bracket-slots/pick', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { tournamentId, slotIndex } = req.body || {};
+    if (!tournamentId || typeof slotIndex !== 'number') {
+      res.status(400).json({ error: 'tournamentId y slotIndex son requeridos.' });
+      return;
+    }
+
+    const tourney = await prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      include: {
+        participants: {
+          where: { isPresent: true },
+          include: { player: true },
+        },
+      },
+    });
+
+    if (!tourney) {
+      res.status(404).json({ error: 'Torneo no encontrado.' });
+      return;
+    }
+
+    const participant = tourney.participants.find(
+      (p) => p.playerId === (user.playerId || (user as any).player?.id)
+    );
+
+    if (!participant) {
+      res.status(403).json({ error: 'No formás parte de este torneo.' });
+      return;
+    }
+
+    const io = getIO(req);
+    const result = await handleBracketSlotPick(io, tournamentId, participant.id, slotIndex);
+    if (!result.ok) {
+      res.status(400).json({ error: result.message });
+      return;
+    }
+
+    res.status(200).json({ ok: true, session: result.session });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Error interno al elegir casillero en la llave.' });
+  }
+});
+
+/**
+ * GET /api/tournaments/themes
+ * Retrieves all themes and their team rosters (merging defaults with persistent CustomTheme records in PostgreSQL).
+ * Accessible exclusively to ADMIN.
+ */
+router.get('/themes', requireAdmin, async (_req: Request, res: Response) => {
+  try {
+    const themes = await tournamentService.getAllThemesWithTeams();
+    res.status(200).json({ themes });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Error interno al consultar las temáticas.' });
+  }
+});
+
+/**
+ * DELETE /api/tournaments/themes/:name
+ * Deletes a custom theme and its persistent roster from PostgreSQL.
+ * Accessible exclusively to ADMIN.
+ */
+router.delete('/themes/:name', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const nameParam = req.params.name;
+    const name = Array.isArray(nameParam) ? nameParam[0] : (nameParam as string);
+    const result = await tournamentService.deleteCustomTheme(user, decodeURIComponent(name));
+    res.status(200).json(result);
+  } catch (error: any) {
+    if (error instanceof NotFoundError || error.statusCode === 404) {
+      res.status(404).json({ error: error.message });
+      return;
+    }
+    if (error instanceof ForbiddenError || error.statusCode === 403) {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+    if (error instanceof BadRequestError || error.statusCode === 400) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.status(500).json({ error: error.message || 'Error interno al eliminar la temática.' });
   }
 });
 

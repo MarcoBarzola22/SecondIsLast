@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  calculateSuspensionInfo,
   createDefaultCardCounts,
   isValidCardCount,
   sortStandingsWithFairPlay,
@@ -389,6 +390,74 @@ describe('domain - fairPlay (RF-61, RF-62, D20)', () => {
       expect(result).toEqual([
         { playerId: 'p1', displayName: 'Solo, Uno', pts: 0, dg: 0, pg: 0, rank: 1 },
       ]);
+    });
+  });
+
+  describe('calculateSuspensionInfo (T46 · RF-Sanciones)', () => {
+    it('returns 0 suspended players when player has no cards or less than 4 yellows', () => {
+      const clean = calculateSuspensionInfo(0, 0);
+      expect(clean.suspendedCount).toBe(0);
+      expect(clean.isSuspended).toBe(false);
+      expect(clean.yellowCycle).toBe(0);
+      expect(clean.motivo).toBe('');
+
+      const oneYellow = calculateSuspensionInfo(1, 0);
+      expect(oneYellow.suspendedCount).toBe(0);
+      expect(oneYellow.isSuspended).toBe(false);
+      expect(oneYellow.yellowCycle).toBe(1);
+
+      const threeYellows = calculateSuspensionInfo(3, 0);
+      expect(threeYellows.suspendedCount).toBe(0);
+      expect(threeYellows.isSuspended).toBe(false);
+      expect(threeYellows.yellowCycle).toBe(3);
+    });
+
+    it('suspends 1 best player when player reaches 4 yellow cards', () => {
+      const fourYellows = calculateSuspensionInfo(4, 0);
+      expect(fourYellows.suspendedCount).toBe(1);
+      expect(fourYellows.isSuspended).toBe(true);
+      expect(fourYellows.yellowCycle).toBe(0);
+      expect(fourYellows.motivo).toBe('4 Amarillas acumuladas');
+    });
+
+    it('suspends 2 best players when player accumulates 8 yellow cards', () => {
+      const eightYellows = calculateSuspensionInfo(8, 0);
+      expect(eightYellows.suspendedCount).toBe(2);
+      expect(eightYellows.isSuspended).toBe(true);
+      expect(eightYellows.yellowCycle).toBe(0);
+      expect(eightYellows.motivo).toBe('8 Amarillas acumuladas');
+    });
+
+    it('suspends 1 best player for each red card', () => {
+      const oneRed = calculateSuspensionInfo(0, 1);
+      expect(oneRed.suspendedCount).toBe(1);
+      expect(oneRed.isSuspended).toBe(true);
+      expect(oneRed.motivo).toBe('1 Tarjeta Roja');
+
+      const twoReds = calculateSuspensionInfo(0, 2);
+      expect(twoReds.suspendedCount).toBe(2);
+      expect(twoReds.isSuspended).toBe(true);
+      expect(twoReds.motivo).toBe('2 Tarjetas Rojas');
+    });
+
+    it('sums sanctions when player has both 4 yellows and red cards', () => {
+      const combined = calculateSuspensionInfo(4, 1);
+      expect(combined.suspendedCount).toBe(2);
+      expect(combined.isSuspended).toBe(true);
+      expect(combined.motivo).toBe('4 Amarillas y 1 Roja');
+
+      const combinedMultiple = calculateSuspensionInfo(8, 2);
+      expect(combinedMultiple.suspendedCount).toBe(4);
+      expect(combinedMultiple.isSuspended).toBe(true);
+      expect(combinedMultiple.motivo).toBe('8 Amarillas y 2 Rojas');
+    });
+
+    it('handles carry-over yellows above multiples of 4 (e.g. 5 yellows = 1 suspended + 1 towards next)', () => {
+      const fiveYellows = calculateSuspensionInfo(5, 0);
+      expect(fiveYellows.suspendedCount).toBe(1);
+      expect(fiveYellows.isSuspended).toBe(true);
+      expect(fiveYellows.yellowCycle).toBe(1);
+      expect(fiveYellows.motivo).toBe('4 Amarillas acumuladas');
     });
   });
 });

@@ -13,6 +13,7 @@ import { LobbyView } from './components/views/LobbyView';
 import { VotingView } from './components/views/VotingView';
 import { TeamsPreviewView } from './components/views/TeamsPreviewView';
 import { RulesView } from './components/views/RulesView';
+import { BracketSlotPickerView } from './components/views/BracketSlotPickerView';
 import { HandshakeModal, type HandshakeMatchData } from './components/views/HandshakeModal';
 import { PrimaryButton, SecondaryButton } from './components/ui/Buttons';
 import { Trophy } from 'lucide-react';
@@ -176,10 +177,14 @@ export default function App() {
             });
           } else if (status === 'IN_PROGRESS') {
             const format = (data.tournament.format || '').toLowerCase();
-            if (format === 'bracket') setView('bracket');
-            else if (format === 'league' || format === 'league_playoffs') setView('league');
-            else if (format === 'group_stage') setView('group_stage');
-            else if (format === 'double_elimination') setView('double_elimination');
+            setView((curr) => {
+              if (curr === 'tabla' || curr === 'reglamento') return curr;
+              if (format === 'bracket') return 'bracket';
+              if (format === 'league' || format === 'league_playoffs') return 'league';
+              if (format === 'group_stage') return 'group_stage';
+              if (format === 'double_elimination') return 'double_elimination';
+              return 'bracket';
+            });
           }
         }
       }
@@ -205,7 +210,7 @@ export default function App() {
       setCloudTournament(null);
       setActiveTournamentId(undefined);
       setVotingSessionData(null);
-      setView('lobby');
+      setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'lobby'));
     };
 
     const handleTournamentStatus = async (payload: any) => {
@@ -214,7 +219,7 @@ export default function App() {
         return;
       }
       if (payload?.status === 'VOTING_FORMAT') {
-        setView('votacion');
+        setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'votacion'));
       } else if (payload?.status === 'VOTING_THEME') {
         setView((curr) => {
           if (curr === 'tabla' || curr === 'reglamento') return curr;
@@ -222,7 +227,7 @@ export default function App() {
           return 'votacion';
         });
       } else if (payload?.status === 'DRAFT') {
-        setView('draft');
+        setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'draft'));
       }
       if (isOnline) {
         await rehydrateActiveTournament();
@@ -230,16 +235,23 @@ export default function App() {
     };
 
     const handleVoteStarted = (payload: any) => {
-      if (payload?.phase === 'FORMAT' || payload?.phase === 'THEME') {
+      if (
+        payload?.phase === 'FORMAT' ||
+        payload?.phase === 'PLAYOFF_SPOTS' ||
+        payload?.phase === 'THEME'
+      ) {
         setVotingSessionData({
           expiresAt: payload.expiresAt,
           options: payload.options,
           phase: payload.phase,
           totalVoters: payload.totalVoters,
         });
-        setView('votacion');
-      } else if (payload?.phase === 'ASSIGNMENT_METHOD') {
-        setView('equipos');
+        setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'votacion'));
+      } else if (
+        payload?.phase === 'ASSIGNMENT_METHOD' ||
+        payload?.phase === 'BRACKET_METHOD'
+      ) {
+        setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'equipos'));
         if (isOnline) {
           rehydrateActiveTournament();
         }
@@ -247,10 +259,13 @@ export default function App() {
     };
 
     const handleVoteEnded = async (payload?: any) => {
-      if (payload?.phase === 'FORMAT' || payload?.phase === 'THEME') {
-        setView('votacion');
-        // Do NOT rehydrate immediately during FORMAT or THEME result display!
-        // This ensures VotingView.tsx stays mounted without any flicker or premature DB state transition.
+      if (
+        payload?.phase === 'FORMAT' ||
+        payload?.phase === 'PLAYOFF_SPOTS' ||
+        payload?.phase === 'THEME'
+      ) {
+        setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'votacion'));
+        // Do NOT rehydrate immediately during FORMAT, PLAYOFF_SPOTS or THEME result display!
         return;
       }
       if (isOnline) {
@@ -260,12 +275,17 @@ export default function App() {
 
     const handleDraftTurnUpdated = async () => {
       setView((curr) => {
+        if (curr === 'tabla' || curr === 'reglamento') return curr;
         if (curr === 'equipos') return 'equipos';
         return 'draft';
       });
       if (isOnline) {
         await rehydrateActiveTournament();
       }
+    };
+
+    const handleBracketSlotSessionStarted = () => {
+      setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'bracket_slots'));
     };
 
     const handleFixtureReady = async (payload: any) => {
@@ -291,34 +311,44 @@ export default function App() {
         ''
       ).toLowerCase();
 
-      if (format === 'league' || format === 'league_playoffs') {
-        setView('league');
-      } else if (format === 'group_stage') {
-        setView('group_stage');
-      } else if (format === 'double_elimination') {
-        setView('double_elimination');
-      } else {
-        setView('bracket');
-      }
+      setView((curr) => {
+        if (curr === 'tabla' || curr === 'reglamento') return curr;
+        if (format === 'league' || format === 'league_playoffs') return 'league';
+        if (format === 'group_stage') return 'group_stage';
+        if (format === 'double_elimination') return 'double_elimination';
+        return 'bracket';
+      });
 
       if (isOnline) {
         await rehydrateActiveTournament();
       }
     };
 
+    const handleLobbyUpdated = async () => {
+      if (isOnline) {
+        await rehydrateActiveTournament();
+      }
+    };
+
+    socket.on('lobby:created', handleLobbyUpdated);
+    socket.on('lobby:updated', handleLobbyUpdated);
     socket.on('tournament:status', handleTournamentStatus);
     socket.on('tournament:abandoned', handleTournamentAbandoned);
     socket.on('vote:started', handleVoteStarted);
     socket.on('vote:ended', handleVoteEnded);
     socket.on('draft:turn_updated', handleDraftTurnUpdated);
+    socket.on('bracket_slot:session_started', handleBracketSlotSessionStarted);
     socket.on('fixture:ready', handleFixtureReady);
 
     return () => {
+      socket.off('lobby:created', handleLobbyUpdated);
+      socket.off('lobby:updated', handleLobbyUpdated);
       socket.off('tournament:status', handleTournamentStatus);
       socket.off('tournament:abandoned', handleTournamentAbandoned);
       socket.off('vote:started', handleVoteStarted);
       socket.off('vote:ended', handleVoteEnded);
       socket.off('draft:turn_updated', handleDraftTurnUpdated);
+      socket.off('bracket_slot:session_started', handleBracketSlotSessionStarted);
       socket.off('fixture:ready', handleFixtureReady);
     };
   }, [socket, isOnline, user, cloudTournament?.format, rehydrateActiveTournament]);
@@ -423,6 +453,7 @@ export default function App() {
         match: payload.match,
         bracket: payload.bracket,
         unblockedParticipants: payload.unblockedParticipants,
+        suspensions: payload.suspensions,
       });
 
       if (isOnline) {
@@ -482,7 +513,12 @@ export default function App() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 md:px-8">
-      <Header currentView={view} onNavigate={handleNavigate} cloudTournament={cloudTournament} />
+      <Header
+        currentView={view}
+        onNavigate={handleNavigate}
+        cloudTournament={cloudTournament}
+        hasActiveTournamentAlert={Boolean(cloudTournament || activeTournament)}
+      />
 
       <main className="mx-auto">
         {view === 'lobby' && (
@@ -539,6 +575,17 @@ export default function App() {
             onProceedToLeague={() => setView('league')}
             onProceedToGroupStage={() => setView('group_stage')}
             onProceedToDoubleElimination={() => setView('double_elimination')}
+          />
+        )}
+
+        {view === 'bracket_slots' && (
+          <BracketSlotPickerView
+            tournamentId={cloudTournament?.id || activeTournamentId || activeTournament?.id}
+            onProceedToBracket={() => {
+              const format = (cloudTournament?.format || '').toLowerCase();
+              if (format === 'double_elimination') setView('double_elimination');
+              else setView('bracket');
+            }}
           />
         )}
 

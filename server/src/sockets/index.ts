@@ -8,6 +8,7 @@ import { registerLobbyHandlers } from './lobbyHandler.js';
 import { registerVotingHandlers } from './votingHandler.js';
 import { registerDrawHandlers } from './drawHandler.js';
 import { registerDraftHandlers } from './draftHandler.js';
+import { registerBracketSlotHandlers } from './bracketSlotHandler.js';
 
 export type AppSocketServer = SocketIOServer;
 
@@ -167,11 +168,12 @@ export function initSocketServer(
       }
     );
 
-    // Register lobby, voting, draw and draft event listeners
+    // Register lobby, voting, draw, draft and bracket slot event listeners
     registerLobbyHandlers(io, socket);
     registerVotingHandlers(io, socket);
     registerDrawHandlers(io, socket);
     registerDraftHandlers(io, socket);
+    registerBracketSlotHandlers(io, socket);
   });
 
   return io;

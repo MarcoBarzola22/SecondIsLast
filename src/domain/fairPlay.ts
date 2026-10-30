@@ -242,3 +242,49 @@ function groupBy<T, K>(list: readonly T[], getKey: (item: T) => K): Map<K, T[]> 
   }
   return map;
 }
+
+export interface SuspensionCalculation {
+  suspendedCount: number;
+  yellowAccumulated: number;
+  redPending: number;
+  yellowCycle: number;
+  motivo: string;
+  isSuspended: boolean;
+}
+
+/**
+ * Calculates disciplinary suspension status ("Mejor jugador afuera")
+ * for accumulated yellow cards and pending red cards (T46 · RF-Sanciones).
+ *
+ * Rules:
+ * - 4 yellow cards = 1 best player suspended for next match.
+ * - Each red card = 1 best player suspended for next match.
+ * - Sanciones sum: floor(yellows / 4) + reds.
+ */
+export function calculateSuspensionInfo(
+  pendingYellowCards = 0,
+  pendingRedCards = 0
+): SuspensionCalculation {
+  const yellowSuspensions = Math.floor(pendingYellowCards / 4);
+  const redSuspensions = pendingRedCards;
+  const suspendedCount = yellowSuspensions + redSuspensions;
+  const yellowCycle = pendingYellowCards % 4;
+
+  let motivo = '';
+  if (yellowSuspensions > 0 && redSuspensions === 0) {
+    motivo = yellowSuspensions === 1 ? '4 Amarillas acumuladas' : `${yellowSuspensions * 4} Amarillas acumuladas`;
+  } else if (redSuspensions > 0 && yellowSuspensions === 0) {
+    motivo = redSuspensions === 1 ? '1 Tarjeta Roja' : `${redSuspensions} Tarjetas Rojas`;
+  } else if (yellowSuspensions > 0 && redSuspensions > 0) {
+    motivo = `${yellowSuspensions === 1 ? '4 Amarillas' : `${yellowSuspensions * 4} Amarillas`} y ${redSuspensions === 1 ? '1 Roja' : `${redSuspensions} Rojas`}`;
+  }
+
+  return {
+    suspendedCount,
+    yellowAccumulated: pendingYellowCards,
+    redPending: pendingRedCards,
+    yellowCycle,
+    motivo,
+    isSuspended: suspendedCount >= 1,
+  };
+}

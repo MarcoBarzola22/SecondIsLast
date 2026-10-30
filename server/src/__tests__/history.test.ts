@@ -228,6 +228,113 @@ describe('Tournament Closure, Podium & Historical Tables (T23 · RF-110, Princip
       expect(res.body.tournaments).toHaveLength(1);
       expect(res.body.tournaments[0].status).toBe(TournamentStatus.COMPLETED);
     });
+
+    it('GET /api/history/players returns registered players from PostgreSQL (T47)', async () => {
+      const token = createToken(player1User);
+      const mockPlayers = [
+        { id: 'p1', firstName: 'Marco', lastName: 'Barzola' },
+        { id: 'p2', firstName: 'Nico', lastName: 'Gómez' },
+      ];
+      vi.spyOn(prisma.player, 'findMany').mockResolvedValue(mockPlayers as any);
+
+      const res = await request(app)
+        .get('/api/history/players')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.players).toHaveLength(2);
+      expect(res.body.players[0].firstName).toBe('Marco');
+    });
+
+    it('GET /api/history/profiles/:playerId returns comprehensive career profile (T47)', async () => {
+      const token = createToken(player1User);
+      const mockPlayer = {
+        id: 'player-1',
+        firstName: 'Lionel',
+        lastName: 'Messi',
+        pendingYellowCards: 1,
+        pendingRedCards: 0,
+      };
+
+      vi.spyOn(prisma.player, 'findUnique').mockResolvedValue(mockPlayer as any);
+      vi.spyOn(prisma.tournament, 'findMany').mockResolvedValue([
+        {
+          id: 't1',
+          name: 'Mundial 2026',
+          format: 'BRACKET',
+          status: TournamentStatus.COMPLETED,
+          createdAt: new Date(),
+          participants: [
+            { id: 'part-1', playerId: 'player-1', teamName: 'Argentina', player: mockPlayer },
+            { id: 'part-2', playerId: 'player-2', teamName: 'Francia', player: { id: 'player-2', firstName: 'Kylian', lastName: 'Mbappé' } },
+          ],
+          matches: [
+            {
+              id: 'm1',
+              seriesId: 'F',
+              homeParticipantId: 'part-1',
+              awayParticipantId: 'part-2',
+              homeScore: 3,
+              awayScore: 3,
+              penaltiesWinnerId: 'part-1',
+              isBye: false,
+              round: 1,
+              leg: 1,
+            },
+          ],
+        },
+      ] as any);
+
+      const res = await request(app)
+        .get('/api/history/profiles/player-1')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.player.id).toBe('player-1');
+      expect(res.body.career.titles).toBe(1);
+      expect(res.body.manoAMano.seriesWon).toBe(1);
+      expect(res.body.manoAMano.penaltiesWon).toBe(1);
+      expect(res.body.teamsUsed).toHaveLength(1);
+      expect(res.body.teamsUsed[0].teamName).toBe('Argentina');
+      expect(res.body.discipline.statusText).toContain('1/4 amarillas');
+    });
+
+    it('DELETE /api/history/reset rejects non-admin users with 403 Forbidden (T47)', async () => {
+      const nonAdminToken = createToken(player1User);
+      const res = await request(app)
+        .delete('/api/history/reset')
+        .set('Authorization', `Bearer ${nonAdminToken}`);
+
+      expect(res.status).toBe(403);
+    });
+
+    it('DELETE /api/history/reset executes database transaction when requested by Admin (T47)', async () => {
+      const adminToken = createToken(adminUser);
+      const deleteAnnualMock = vi.fn().mockResolvedValue({ count: 5 });
+      const deleteH2HMock = vi.fn().mockResolvedValue({ count: 3 });
+      const deleteStatsMock = vi.fn().mockResolvedValue({ count: 4 });
+      const deleteTourneysMock = vi.fn().mockResolvedValue({ count: 2 });
+
+      vi.spyOn(prisma, '$transaction').mockImplementation(async (callback: any) => {
+        return callback({
+          annualRankingEntry: { deleteMany: deleteAnnualMock },
+          headToHeadRecord: { deleteMany: deleteH2HMock },
+          historicalStats: { deleteMany: deleteStatsMock },
+          tournament: { deleteMany: deleteTourneysMock },
+        });
+      });
+
+      const res = await request(app)
+        .delete('/api/history/reset')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.message).toContain('Historial reseteado exitosamente');
+      expect(deleteAnnualMock).toHaveBeenCalled();
+      expect(deleteH2HMock).toHaveBeenCalled();
+      expect(deleteStatsMock).toHaveBeenCalled();
+      expect(deleteTourneysMock).toHaveBeenCalled();
+    });
   });
 
   describe('Tournament Finalization & Podium Transition (POST /api/history/tournaments/:id/finish)', () => {

@@ -12,6 +12,10 @@ import {
   FileUp,
   HardDrive,
   FileCheck2,
+  Shuffle,
+  Edit3,
+  Layers,
+  Sparkles,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useAppState, useAppDispatch } from '../../state/AppContext';
@@ -26,6 +30,12 @@ export interface WhitelistEntryDto {
   playerId: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ThemeDto {
+  name: string;
+  teams: string[];
+  isCustom: boolean;
 }
 
 interface WhitelistModalProps {
@@ -44,8 +54,8 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  // Tabs: 'whitelist' | 'migration'
-  const [activeTab, setActiveTab] = useState<'whitelist' | 'migration'>('whitelist');
+  // Tabs: 'whitelist' | 'migration' | 'themes'
+  const [activeTab, setActiveTab] = useState<'whitelist' | 'migration' | 'themes'>('whitelist');
 
   // Form states
   const [email, setEmail] = useState('');
@@ -54,6 +64,16 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
   const [isCreatingNewPlayer, setIsCreatingNewPlayer] = useState<boolean>(false);
   const [newFirstName, setNewFirstName] = useState('');
   const [newLastName, setNewLastName] = useState('');
+
+  // Themes & Teams states
+  const [themes, setThemes] = useState<ThemeDto[]>([]);
+  const [loadingThemes, setLoadingThemes] = useState<boolean>(false);
+  const [themesError, setThemesError] = useState<string | null>(null);
+  const [themesSuccess, setThemesSuccess] = useState<string | null>(null);
+  const [selectedThemeName, setSelectedThemeName] = useState<string>('');
+  const [themeFormName, setThemeFormName] = useState<string>('');
+  const [themeFormTeamsText, setThemeFormTeamsText] = useState<string>('');
+  const [savingTheme, setSavingTheme] = useState<boolean>(false);
 
   // Migration states (T26)
   const [migrating, setMigrating] = useState<boolean>(false);
@@ -186,13 +206,134 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
     }
   }, [isAdmin]);
 
+  const fetchThemes = useCallback(async () => {
+    if (!isAdmin) return;
+    setLoadingThemes(true);
+    setThemesError(null);
+    try {
+      const res = await fetch('/api/tournaments/themes', {
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error || 'Error al obtener temáticas.');
+      }
+      if (Array.isArray(data?.themes)) {
+        setThemes(data.themes);
+      }
+    } catch (err: any) {
+      setThemesError(err.message || 'Error al obtener temáticas.');
+    } finally {
+      setLoadingThemes(false);
+    }
+  }, [isAdmin]);
+
+  const handleSelectTheme = (t: ThemeDto) => {
+    setSelectedThemeName(t.name);
+    setThemeFormName(t.name);
+    setThemeFormTeamsText(t.teams.join('\n'));
+    setThemesError(null);
+    setThemesSuccess(null);
+  };
+
+  const handleNewTheme = () => {
+    setSelectedThemeName('');
+    setThemeFormName('');
+    setThemeFormTeamsText('');
+    setThemesError(null);
+    setThemesSuccess(null);
+  };
+
+  const handleSaveTheme = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setThemesError(null);
+    setThemesSuccess(null);
+
+    const trimmedName = themeFormName.trim();
+    if (!trimmedName) {
+      setThemesError('El nombre de la temática es obligatorio.');
+      return;
+    }
+
+    const lines = themeFormTeamsText
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+
+    if (lines.length < 4) {
+      setThemesError('La temática debe contener al menos 4 equipos sin líneas vacías.');
+      return;
+    }
+
+    setSavingTheme(true);
+    try {
+      const res = await fetch('/api/tournaments/teams', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          theme: trimmedName,
+          teams: lines,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error || 'Error al guardar la temática.');
+      }
+
+      setThemesSuccess(`Temática "${trimmedName}" guardada exitosamente con ${lines.length} equipos.`);
+      await fetchThemes();
+      setSelectedThemeName(trimmedName);
+    } catch (err: any) {
+      setThemesError(err.message || 'Error al guardar la temática.');
+    } finally {
+      setSavingTheme(false);
+    }
+  };
+
+  const handleDeleteTheme = async (themeName: string) => {
+    const confirmed = window.confirm(
+      `¿Seguro que querés eliminar la temática personalizada "${themeName}"? Esta acción no se puede deshacer.`
+    );
+    if (!confirmed) return;
+
+    setThemesError(null);
+    setThemesSuccess(null);
+    try {
+      const res = await fetch(`/api/tournaments/themes/${encodeURIComponent(themeName)}`, {
+        method: 'DELETE',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      });
+
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error || 'Error al eliminar la temática.');
+      }
+
+      setThemesSuccess(`Temática "${themeName}" eliminada correctamente.`);
+      if (selectedThemeName === themeName) {
+        handleNewTheme();
+      }
+      await fetchThemes();
+    } catch (err: any) {
+      setThemesError(err.message || 'Error al eliminar la temática.');
+    }
+  };
+
   useEffect(() => {
     if (isOpen && isAdmin) {
       fetchEntries();
+      fetchThemes();
       setError(null);
       setSuccess(null);
     }
-  }, [isOpen, isAdmin, fetchEntries]);
+  }, [isOpen, isAdmin, fetchEntries, fetchThemes]);
 
   if (!isOpen) return null;
 
@@ -373,6 +514,18 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
           >
             <Database className="h-4 w-4" />
             <span>Migración a PostgreSQL</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('themes')}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 transition ${
+              activeTab === 'themes'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Shuffle className="h-4 w-4" />
+            <span>Temáticas y Equipos ({themes.length})</span>
           </button>
         </div>
 
@@ -668,6 +821,192 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
                     <span>{migrating ? 'Importando...' : 'Importar a PostgreSQL'}</span>
                   </PrimaryButton>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'themes' && (
+            <div className="space-y-5">
+              {themesError && (
+                <div className="flex items-center gap-2 p-3 bg-destructive/15 border border-destructive/40 text-destructive text-xs rounded-sm">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>{themesError}</span>
+                </div>
+              )}
+
+              {themesSuccess && (
+                <div className="flex items-center gap-2 p-3 bg-primary/15 border border-primary/40 text-primary text-xs rounded-sm">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  <span>{themesSuccess}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {/* Left: Themes list */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-display text-xs font-bold uppercase tracking-wider text-foreground flex items-center gap-1.5">
+                      <Layers className="h-4 w-4 text-primary" />
+                      <span>Temáticas ({themes.length})</span>
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={fetchThemes}
+                        disabled={loadingThemes}
+                        className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary transition"
+                        title="Actualizar lista"
+                      >
+                        <RefreshCw className={`h-3 w-3 ${loadingThemes ? 'animate-spin' : ''}`} />
+                        <span className="hidden sm:inline">Refrescar</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleNewTheme}
+                        className="flex items-center gap-1 text-[11px] font-bold text-primary hover:underline"
+                        title="Crear nueva temática desde cero"
+                      >
+                        <Plus className="h-3 w-3" />
+                        <span>+ Nueva</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+                    {themes.map((t) => {
+                      const isSelected = selectedThemeName === t.name;
+                      return (
+                        <div
+                          key={t.name}
+                          onClick={() => handleSelectTheme(t)}
+                          className={`flex items-center justify-between p-3 rounded-sm border cursor-pointer transition ${
+                            isSelected
+                              ? 'border-primary bg-primary/15 shadow-sm'
+                              : 'border-border/70 bg-secondary/20 hover:bg-secondary/40'
+                          }`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-xs text-foreground truncate">
+                                {t.name}
+                              </span>
+                              <span
+                                className={`text-[10px] font-mono px-1.5 py-0.2 rounded border ${
+                                  t.isCustom
+                                    ? 'bg-primary/20 text-primary border-primary/40 font-bold'
+                                    : 'bg-secondary text-muted-foreground border-border/80'
+                                }`}
+                              >
+                                {t.isCustom ? 'Personalizada' : 'Oficial'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
+                              {t.teams.length} equipos: {t.teams.slice(0, 3).join(', ')}
+                              {t.teams.length > 3 ? '...' : ''}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-1 ml-2">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSelectTheme(t);
+                              }}
+                              className="p-1 rounded text-muted-foreground hover:text-primary transition"
+                              title="Editar equipos de esta temática"
+                            >
+                              <Edit3 className="h-3.5 w-3.5" />
+                            </button>
+                            {t.isCustom && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteTheme(t.name);
+                                }}
+                                className="p-1 rounded text-muted-foreground hover:text-destructive transition"
+                                title="Eliminar temática personalizada"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Right: Create / Edit Form */}
+                <form
+                  onSubmit={handleSaveTheme}
+                  className="bg-secondary/25 border border-border/80 rounded-sm p-4 space-y-3 flex flex-col justify-between"
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-border/60 pb-2">
+                      <h3 className="font-display text-xs font-bold uppercase tracking-wider text-accent flex items-center gap-1.5">
+                        <Sparkles className="h-3.5 w-3.5" />
+                        <span>
+                          {selectedThemeName
+                            ? `Editar: ${selectedThemeName}`
+                            : 'Crear Nueva Temática'}
+                        </span>
+                      </h3>
+                      {selectedThemeName && (
+                        <button
+                          type="button"
+                          onClick={handleNewTheme}
+                          className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                        >
+                          Limpiar / Nueva
+                        </button>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+                        Nombre de la temática *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={themeFormName}
+                        onChange={(e) => setThemeFormName(e.target.value)}
+                        placeholder="Ej. Selecciones Clásicas, Apertura 2006..."
+                        className={`${inputClassName} w-full text-xs py-2`}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+                        Equipos que pertenecen a la temática (uno por línea) *
+                      </label>
+                      <textarea
+                        rows={9}
+                        required
+                        value={themeFormTeamsText}
+                        onChange={(e) => setThemeFormTeamsText(e.target.value)}
+                        placeholder="Boca Juniors&#10;River Plate&#10;Independiente&#10;Racing Club&#10;San Lorenzo..."
+                        className="w-full rounded border border-border bg-secondary/50 p-2.5 font-mono text-xs text-foreground focus:border-primary focus:outline-none"
+                      />
+                      <span className="text-[10px] text-muted-foreground">
+                        Mínimo 4 equipos. Cada línea representa un equipo seleccionable.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-border/60 flex items-center justify-end gap-2">
+                    <PrimaryButton
+                      type="submit"
+                      disabled={savingTheme}
+                      className="py-2 text-xs flex items-center justify-center gap-1.5"
+                    >
+                      <ShieldCheck className="h-3.5 w-3.5" />
+                      <span>{savingTheme ? 'Guardando en DB...' : 'Guardar en PostgreSQL'}</span>
+                    </PrimaryButton>
+                  </div>
+                </form>
               </div>
             </div>
           )}

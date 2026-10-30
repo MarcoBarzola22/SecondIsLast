@@ -6,6 +6,9 @@ export interface Player {
   id: PlayerId;
   firstName: string;
   lastName: string;
+  pendingYellowCards?: number;
+  pendingRedCards?: number;
+  suspendedPlayersCount?: number;
   createdAt: string; // ISO 8601
 }
 
@@ -195,6 +198,7 @@ export interface ActiveTournament {
   groupMatches?: GroupMatch[]; // Matches for group_stage
   walkoverPlayerIds?: PlayerId[]; // Players who abandoned the tournament (RF-64, RF-65)
   matches?: MatchState[]; // Handshake matches for multiplayer tournament
+  suspensions?: Record<PlayerId, { suspendedCount: number; yellowAccumulated: number; redPending: number }>;
 }
 
 export interface Podium {

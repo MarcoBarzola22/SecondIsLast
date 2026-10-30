@@ -46,6 +46,7 @@ export interface ActiveTournamentResult extends Tournament {
   participants: (TournamentParticipant & { player: any })[];
   count: number;
   canStart: boolean;
+  suspensions?: Record<string, { suspendedCount: number; yellowAccumulated: number; redPending: number }>;
 }
 
 export class TournamentService {
@@ -80,11 +81,42 @@ export class TournamentService {
       return null;
     }
 
-    const count = tournament.participants.length;
+    const participants = tournament.participants.map((p) => {
+      const y = (p.player as any)?.pendingYellowCards ?? 0;
+      const r = (p.player as any)?.pendingRedCards ?? 0;
+      const suspendedPlayersCount = Math.floor(y / 4) + r;
+      return {
+        ...p,
+        player: p.player
+          ? {
+              ...p.player,
+              pendingYellowCards: y,
+              pendingRedCards: r,
+              suspendedPlayersCount,
+            }
+          : p.player,
+      };
+    });
+
+    const suspensions: Record<string, { suspendedCount: number; yellowAccumulated: number; redPending: number }> = {};
+    for (const p of participants) {
+      const id = p.playerId || (p.player as any)?.id;
+      if (id && p.player) {
+        suspensions[id] = {
+          suspendedCount: (p.player as any).suspendedPlayersCount,
+          yellowAccumulated: (p.player as any).pendingYellowCards,
+          redPending: (p.player as any).pendingRedCards,
+        };
+      }
+    }
+
+    const count = participants.length;
     const canStart = count >= 4;
 
     return {
       ...tournament,
+      participants,
+      suspensions,
       count,
       canStart,
     };
@@ -607,7 +639,7 @@ export class TournamentService {
       phase === 'ASSIGNMENT_METHOD'
         ? ['DIRECT_DRAW', 'DRAFT_ORDER']
         : phase === 'THEME'
-        ? this.getThemeVotingOptions()
+        ? await this.getThemeVotingOptions()
         : (formatOptions.includes('random') ? formatOptions : [...formatOptions, 'random']);
 
     let updatedTournament = tournament;
@@ -652,7 +684,7 @@ export class TournamentService {
    */
   async castVote(
     user: AuthUser,
-    phase: 'FORMAT' | 'THEME' | 'ASSIGNMENT_METHOD',
+    phase: 'FORMAT' | 'PLAYOFF_SPOTS' | 'THEME' | 'ASSIGNMENT_METHOD' | 'BRACKET_METHOD',
     choice: string,
     matchFormat?: string,
     tournamentId?: string
@@ -664,6 +696,8 @@ export class TournamentService {
     const expectedStatuses =
       phase === 'FORMAT'
         ? [TournamentStatus.VOTING_FORMAT, TournamentStatus.LOBBY]
+        : phase === 'PLAYOFF_SPOTS'
+        ? [TournamentStatus.VOTING_THEME, TournamentStatus.VOTING_FORMAT]
         : phase === 'THEME'
         ? [TournamentStatus.VOTING_THEME, TournamentStatus.VOTING_FORMAT]
         : [TournamentStatus.VOTING_THEME, TournamentStatus.VOTING_FORMAT, TournamentStatus.IN_PROGRESS];
@@ -821,6 +855,18 @@ export class TournamentService {
       targetTheme = active?.theme || 'Clásicos PES 6';
     }
 
+    // Check PostgreSQL CustomTheme first
+    const customRecord = await this.prisma.customTheme.findUnique({
+      where: { name: targetTheme },
+    });
+    if (customRecord && Array.isArray(customRecord.teams) && customRecord.teams.length > 0) {
+      return {
+        theme: targetTheme,
+        teams: customRecord.teams as string[],
+        isCustom: true,
+      };
+    }
+
     const custom = customPreloadedTeams.get(targetTheme);
     if (custom && custom.length > 0) {
       return {
@@ -848,6 +894,7 @@ export class TournamentService {
   ): Promise<{
     theme: string;
     teams: string[];
+    isCustom: boolean;
   }> {
     if (user.role !== Role.ADMIN) {
       throw new ForbiddenError('Solo los administradores pueden precargar equipos por temática.');
@@ -862,11 +909,62 @@ export class TournamentService {
       throw new BadRequestError(validation.errorMessage!);
     }
 
-    customPreloadedTeams.set(theme.trim(), validation.sanitizedTeams);
+    const trimmedTheme = theme.trim();
+
+    // Persist to PostgreSQL CustomTheme
+    await this.prisma.customTheme.upsert({
+      where: { name: trimmedTheme },
+      create: {
+        name: trimmedTheme,
+        teams: validation.sanitizedTeams,
+      },
+      update: {
+        teams: validation.sanitizedTeams,
+      },
+    });
+
+    customPreloadedTeams.set(trimmedTheme, validation.sanitizedTeams);
 
     return {
-      theme: theme.trim(),
+      theme: trimmedTheme,
       teams: validation.sanitizedTeams,
+      isCustom: true,
+    };
+  }
+
+  /**
+   * Deletes a custom theme and its teams from PostgreSQL. Accessible exclusively to ADMIN.
+   */
+  async deleteCustomTheme(
+    user: AuthUser,
+    name: string
+  ): Promise<{ success: boolean; message: string }> {
+    if (user.role !== Role.ADMIN) {
+      throw new ForbiddenError('Solo los administradores pueden eliminar temáticas personalizadas.');
+    }
+
+    if (!name || typeof name !== 'string') {
+      throw new BadRequestError('El nombre de la temática a eliminar es obligatorio.');
+    }
+
+    const trimmedName = name.trim();
+    const existing = await this.prisma.customTheme.findUnique({
+      where: { name: trimmedName },
+    });
+
+    if (!existing) {
+      throw new NotFoundError(`No existe una temática personalizada con el nombre "${trimmedName}".`);
+    }
+
+    await this.prisma.customTheme.delete({
+      where: { name: trimmedName },
+    });
+
+    customPreloadedTeams.delete(trimmedName);
+
+    return {
+      success: true,
+      message: `Temática personalizada "${trimmedName}" eliminada correctamente.`,
     };
   }
 
@@ -1006,14 +1104,40 @@ export class TournamentService {
           data: { teamName: team },
         });
       }
-      // Wait 7000ms for clients to view the "¡Equipos Sorteados!" panel before generating fixture (RF-104, T42)
-      setTimeout(async () => {
+      // Wait 7000ms for clients to view the "¡Equipos Sorteados!" panel before advancing (RF-104, T42, T45)
+      const timer = setTimeout(async () => {
+        pendingFixtureTimers.delete(tournament.id);
         try {
-          await this.generateRelationalFixture(tournament.id, io);
+          const fresh = await this.prisma.tournament.findUnique({
+            where: { id: tournament.id },
+            include: { participants: { where: { isPresent: true } } },
+          });
+          if (!fresh || fresh.status === TournamentStatus.ABANDONED) {
+            return;
+          }
+          const isKnockout =
+            fresh.format === 'BRACKET' ||
+            fresh.format === 'DOUBLE_ELIMINATION';
+
+          if (isKnockout && io) {
+            const { startVotingSession } = await import('../sockets/votingHandler.js');
+            startVotingSession(
+              io,
+              tournament.id,
+              'BRACKET_METHOD',
+              ['DIRECT_MATCHUP_DRAW', 'PICK_BRACKET_SLOT'],
+              fresh.participants.length,
+              60,
+              this.prisma
+            );
+          } else {
+            await this.generateRelationalFixture(tournament.id, io);
+          }
         } catch (err) {
-          console.error('[TournamentService] Error generating fixture after draw:', err);
+          console.error('[TournamentService] Error advancing after team draw:', err);
         }
       }, 7000);
+      pendingFixtureTimers.set(tournament.id, timer);
     };
 
     const session = startDrawAnimation(io, tournament.id, plan, onComplete, intervalMs);
@@ -1032,7 +1156,8 @@ export class TournamentService {
    */
   async generateRelationalFixture(
     tournamentId: string,
-    io?: AppSocketServer | null
+    io?: AppSocketServer | null,
+    orderedParticipantIds?: string[]
   ): Promise<{
     tournament: Tournament;
     matches: any[];
@@ -1059,10 +1184,17 @@ export class TournamentService {
       throw new BadRequestError('No se cumple el quórum mínimo de 4 participantes para generar el fixture.');
     }
 
-    const mappedParticipants = participants.map((p) => ({
+    let mappedParticipants = participants.map((p) => ({
       id: p.id,
       name: `${p.player.firstName} ${p.player.lastName}`.trim(),
     }));
+
+    if (orderedParticipantIds && orderedParticipantIds.length === participants.length) {
+      const partMap = new Map(mappedParticipants.map((p) => [p.id, p]));
+      mappedParticipants = orderedParticipantIds
+        .map((id) => partMap.get(id)!)
+        .filter(Boolean);
+    }
 
     const format = tournament.format || 'BRACKET';
     const matchFormat = tournament.matchFormat || 'SINGLE_MATCH';
@@ -1071,6 +1203,7 @@ export class TournamentService {
       format,
       matchFormat,
       participants: mappedParticipants,
+      isPreSeeded: Boolean(orderedParticipantIds),
     });
 
     // RNF-2: Atomic transaction in PostgreSQL via Prisma
@@ -1139,11 +1272,42 @@ export class TournamentService {
       },
     });
 
+    const participantsSource = fullTournament?.participants || tournament.participants;
+    const enrichedParticipants = participantsSource.map((p: any) => {
+      const y = (p.player as any)?.pendingYellowCards ?? 0;
+      const r = (p.player as any)?.pendingRedCards ?? 0;
+      const suspendedPlayersCount = Math.floor(y / 4) + r;
+      return {
+        ...p,
+        player: p.player
+          ? {
+              ...p.player,
+              pendingYellowCards: y,
+              pendingRedCards: r,
+              suspendedPlayersCount,
+            }
+          : p.player,
+      };
+    });
+
+    const suspensions: Record<string, { suspendedCount: number; yellowAccumulated: number; redPending: number }> = {};
+    for (const p of enrichedParticipants) {
+      const id = p.playerId || (p.player as any)?.id;
+      if (id && p.player) {
+        suspensions[id] = {
+          suspendedCount: (p.player as any).suspendedPlayersCount,
+          yellowAccumulated: (p.player as any).pendingYellowCards,
+          redPending: (p.player as any).pendingRedCards,
+        };
+      }
+    }
+
     const tournamentPayload = {
       ...(fullTournament || tournament),
       ...updatedTournament,
       matches,
-      participants: fullTournament?.participants || tournament.participants,
+      participants: enrichedParticipants,
+      suspensions,
     };
 
     // Broadcast fixture:ready WebSocket event (Plan §3.2)
@@ -1154,6 +1318,7 @@ export class TournamentService {
         currentRound: 1,
         format,
         matchFormat,
+        suspensions,
       });
     }
 
@@ -1460,6 +1625,18 @@ export class TournamentService {
       throw new ForbiddenError('Solo el administrador puede reiniciar o abandonar el torneo globalmente.');
     }
 
+    // Update all non-completed active tournaments in PostgreSQL to ABANDONED
+    if (typeof this.prisma.tournament.updateMany === 'function') {
+      await this.prisma.tournament.updateMany({
+        where: {
+          status: { in: ACTIVE_STATUSES_AS_ARRAY },
+        },
+        data: { status: TournamentStatus.ABANDONED },
+      });
+    }
+
+    cancelPendingFixture(tournament.id);
+
     const updated = await this.prisma.tournament.update({
       where: { id: tournament.id },
       data: { status: TournamentStatus.ABANDONED },
@@ -1474,10 +1651,28 @@ export class TournamentService {
   }
 
   /**
-   * Retrieves all available theme names, merging default PES 6 themes with admin custom preloads.
+   * Retrieves all available themes with their full team lists,
+   * merging predefined default themes with persistent CustomTheme records in PostgreSQL.
    */
-  getAllAvailableThemeNames(): string[] {
-    const defaultThemes = [
+  async getAllThemesWithTeams(): Promise<
+    Array<{
+      name: string;
+      teams: string[];
+      isCustom: boolean;
+    }>
+  > {
+    const customInDb = await this.prisma.customTheme.findMany({
+      orderBy: { name: 'asc' },
+    });
+
+    const customMap = new Map<string, string[]>();
+    for (const c of customInDb) {
+      if (Array.isArray(c.teams)) {
+        customMap.set(c.name, c.teams as string[]);
+      }
+    }
+
+    const defaultThemeNames = [
       'Clásicos PES 6',
       'Apertura 2006',
       'Champions (Europa)',
@@ -1485,17 +1680,68 @@ export class TournamentService {
       'Mundial / Selecciones',
       ...Object.keys(DEFAULT_THEME_TEAMS),
     ];
-    const customThemes = Array.from(customPreloadedTeams.keys());
-    return Array.from(new Set([...defaultThemes, ...customThemes]));
+    const uniqueDefaultNames = Array.from(new Set(defaultThemeNames));
+
+    const result: Array<{ name: string; teams: string[]; isCustom: boolean }> = [];
+    const processed = new Set<string>();
+
+    for (const name of uniqueDefaultNames) {
+      processed.add(name);
+      if (customMap.has(name)) {
+        result.push({
+          name,
+          teams: customMap.get(name)!,
+          isCustom: true,
+        });
+      } else {
+        result.push({
+          name,
+          teams: getAvailableTeamsForTheme(name),
+          isCustom: false,
+        });
+      }
+    }
+
+    for (const [name, teams] of customMap.entries()) {
+      if (!processed.has(name)) {
+        result.push({
+          name,
+          teams,
+          isCustom: true,
+        });
+      }
+    }
+
+    return result;
   }
 
-  getThemeVotingOptions(): string[] {
-    return [...this.getAllAvailableThemeNames(), 'random'];
+  /**
+   * Retrieves all available theme names, merging default PES 6 themes with admin custom preloads.
+   */
+  async getAllAvailableThemeNames(): Promise<string[]> {
+    const all = await this.getAllThemesWithTeams();
+    return all.map((t) => t.name);
+  }
+
+  async getThemeVotingOptions(): Promise<string[]> {
+    const names = await this.getAllAvailableThemeNames();
+    return [...names, 'random'];
   }
 }
 
 // In-memory custom preloaded teams map: theme -> teams[]
 const customPreloadedTeams = new Map<string, string[]>();
+
+// In-memory pending fixture generation timers: tournamentId -> timeout
+const pendingFixtureTimers = new Map<string, NodeJS.Timeout>();
+
+export function cancelPendingFixture(tournamentId: string): void {
+  const timer = pendingFixtureTimers.get(tournamentId);
+  if (timer) {
+    clearTimeout(timer);
+    pendingFixtureTimers.delete(tournamentId);
+  }
+}
 
 export const tournamentService = new TournamentService();
 

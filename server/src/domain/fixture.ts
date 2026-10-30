@@ -24,6 +24,7 @@ export interface FixtureOptions {
   matchFormat?: 'SINGLE_MATCH' | 'TWO_LEGGED' | string;
   participants: Array<{ id: string; name?: string }>;
   rng?: () => number;
+  isPreSeeded?: boolean;
 }
 
 /**
@@ -51,9 +52,13 @@ interface SeriesSlot {
 /**
  * Generates asymmetric bracket series for 4 to 10 players.
  */
-function buildBracketSeries(participantIds: readonly PlayerId[], rng: () => number = Math.random) {
+function buildBracketSeries(
+  participantIds: readonly PlayerId[],
+  rng: () => number = Math.random,
+  isPreSeeded: boolean = false
+) {
   const count = participantIds.length;
-  const p = shuffle(participantIds, rng);
+  const p = isPreSeeded ? [...participantIds] : shuffle(participantIds, rng);
   const series: SeriesSlot[] = [];
   const byes: PlayerId[] = [];
 
@@ -205,9 +210,13 @@ function buildLeagueMatches(
 /**
  * Builds double elimination series for 4 to 10 players.
  */
-function buildDoubleEliminationSeries(participantIds: readonly PlayerId[], rng: () => number = Math.random) {
+function buildDoubleEliminationSeries(
+  participantIds: readonly PlayerId[],
+  rng: () => number = Math.random,
+  isPreSeeded: boolean = false
+) {
   const count = participantIds.length;
-  const p = shuffle(participantIds, rng);
+  const p = isPreSeeded ? [...participantIds] : shuffle(participantIds, rng);
   const series: SeriesSlot[] = [];
   const byes: PlayerId[] = [];
 
@@ -330,7 +339,7 @@ export function generateTournamentFixture(options: FixtureOptions): GeneratedFix
   let byesCount = 0;
 
   if (normalizedFormat === 'BRACKET') {
-    const result = buildBracketSeries(participantIds, rng);
+    const result = buildBracketSeries(participantIds, rng, Boolean(options.isPreSeeded));
     const hasR16 = count >= 9;
     const hasQF = count >= 5;
     byesCount = result.byes.length;
@@ -396,7 +405,7 @@ export function generateTournamentFixture(options: FixtureOptions): GeneratedFix
       }
     }
   } else if (normalizedFormat === 'DOUBLE_ELIMINATION') {
-    const result = buildDoubleEliminationSeries(participantIds, rng);
+    const result = buildDoubleEliminationSeries(participantIds, rng, Boolean(options.isPreSeeded));
     byesCount = result.byes.length;
 
     for (const byeId of result.byes) {
@@ -488,4 +497,464 @@ export function generateTournamentFixture(options: FixtureOptions): GeneratedFix
     totalMatches: matches.length,
     format: normalizedFormat,
   };
+}
+
+/**
+ * Builds uneven/merit playoff bracket matches for LEAGUE_PLAYOFFS (RF-68, RF-86).
+ * Cruces disparejos: los últimos clasificados juegan los partidos previos y los primeros esperan.
+ */
+export function buildPlayoffMatchesFromQualified(
+  qualifiedIds: readonly PlayerId[],
+  allStandingsParticipantIds: readonly PlayerId[],
+  startRound: number,
+  isTwoLegged: boolean = false
+): RawFixtureMatch[] {
+  const matches: RawFixtureMatch[] = [];
+  const K = qualifiedIds.length;
+  const p = (rank: number) => qualifiedIds[rank - 1]!;
+  const extraP = (rank: number) => allStandingsParticipantIds[rank - 1] ?? null;
+
+  if (K === 2) {
+    // 1° vs 2° Final, 3° vs 4° Third place
+    matches.push({
+      round: startRound + 1,
+      leg: 1,
+      seriesId: 'F',
+      homeParticipantId: p(1),
+      awayParticipantId: p(2),
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 1,
+        leg: 2,
+        seriesId: 'F',
+        homeParticipantId: p(2),
+        awayParticipantId: p(1),
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    const p3 = extraP(3);
+    const p4 = extraP(4);
+    if (p3 && p4) {
+      matches.push({
+        round: startRound + 1,
+        leg: 1,
+        seriesId: 'TP',
+        homeParticipantId: p3,
+        awayParticipantId: p4,
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+  } else if (K === 3) {
+    // 2° vs 3° in SF1, winner vs 1° in Final
+    matches.push({
+      round: startRound + 1,
+      leg: 1,
+      seriesId: 'SF1',
+      homeParticipantId: p(2),
+      awayParticipantId: p(3),
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 1,
+        leg: 2,
+        seriesId: 'SF1',
+        homeParticipantId: p(3),
+        awayParticipantId: p(2),
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    // F: 1° vs winner SF1
+    matches.push({
+      round: startRound + 2,
+      leg: 1,
+      seriesId: 'F',
+      homeParticipantId: p(1),
+      awayParticipantId: null,
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 2,
+        leg: 2,
+        seriesId: 'F',
+        homeParticipantId: null,
+        awayParticipantId: p(1),
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    // TP: loser SF1 vs 4°
+    const p4 = extraP(4);
+    if (p4) {
+      matches.push({
+        round: startRound + 2,
+        leg: 1,
+        seriesId: 'TP',
+        homeParticipantId: null,
+        awayParticipantId: p4,
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+  } else if (K === 4) {
+    // SF1: 1 vs 4, SF2: 2 vs 3
+    matches.push({
+      round: startRound + 1,
+      leg: 1,
+      seriesId: 'SF1',
+      homeParticipantId: p(1),
+      awayParticipantId: p(4),
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 1,
+        leg: 2,
+        seriesId: 'SF1',
+        homeParticipantId: p(4),
+        awayParticipantId: p(1),
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    matches.push({
+      round: startRound + 1,
+      leg: 1,
+      seriesId: 'SF2',
+      homeParticipantId: p(2),
+      awayParticipantId: p(3),
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 1,
+        leg: 2,
+        seriesId: 'SF2',
+        homeParticipantId: p(3),
+        awayParticipantId: p(2),
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    // F and TP
+    matches.push({
+      round: startRound + 2,
+      leg: 1,
+      seriesId: 'F',
+      homeParticipantId: null,
+      awayParticipantId: null,
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 2,
+        leg: 2,
+        seriesId: 'F',
+        homeParticipantId: null,
+        awayParticipantId: null,
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    matches.push({
+      round: startRound + 2,
+      leg: 1,
+      seriesId: 'TP',
+      homeParticipantId: null,
+      awayParticipantId: null,
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+  } else if (K === 5) {
+    // QF1: 4 vs 5 (winner to SF1 vs 1)
+    matches.push({
+      round: startRound + 1,
+      leg: 1,
+      seriesId: 'QF1',
+      homeParticipantId: p(4),
+      awayParticipantId: p(5),
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 1,
+        leg: 2,
+        seriesId: 'QF1',
+        homeParticipantId: p(5),
+        awayParticipantId: p(4),
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    // SF1: winner QF1 vs 1°
+    matches.push({
+      round: startRound + 2,
+      leg: 1,
+      seriesId: 'SF1',
+      homeParticipantId: null,
+      awayParticipantId: p(1),
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 2,
+        leg: 2,
+        seriesId: 'SF1',
+        homeParticipantId: p(1),
+        awayParticipantId: null,
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    // SF2: 2° vs 3°
+    matches.push({
+      round: startRound + 2,
+      leg: 1,
+      seriesId: 'SF2',
+      homeParticipantId: p(2),
+      awayParticipantId: p(3),
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 2,
+        leg: 2,
+        seriesId: 'SF2',
+        homeParticipantId: p(3),
+        awayParticipantId: p(2),
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    // F and TP
+    matches.push({
+      round: startRound + 3,
+      leg: 1,
+      seriesId: 'F',
+      homeParticipantId: null,
+      awayParticipantId: null,
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 3,
+        leg: 2,
+        seriesId: 'F',
+        homeParticipantId: null,
+        awayParticipantId: null,
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    matches.push({
+      round: startRound + 3,
+      leg: 1,
+      seriesId: 'TP',
+      homeParticipantId: null,
+      awayParticipantId: null,
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+  } else if (K === 6) {
+    // QF1: 4 vs 5 (winner to SF1 vs 1), QF2: 3 vs 6 (winner to SF2 vs 2)
+    matches.push({
+      round: startRound + 1,
+      leg: 1,
+      seriesId: 'QF1',
+      homeParticipantId: p(4),
+      awayParticipantId: p(5),
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 1,
+        leg: 2,
+        seriesId: 'QF1',
+        homeParticipantId: p(5),
+        awayParticipantId: p(4),
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    matches.push({
+      round: startRound + 1,
+      leg: 1,
+      seriesId: 'QF2',
+      homeParticipantId: p(3),
+      awayParticipantId: p(6),
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 1,
+        leg: 2,
+        seriesId: 'QF2',
+        homeParticipantId: p(6),
+        awayParticipantId: p(3),
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    // SF1: winner QF1 vs 1°, SF2: winner QF2 vs 2°
+    matches.push({
+      round: startRound + 2,
+      leg: 1,
+      seriesId: 'SF1',
+      homeParticipantId: null,
+      awayParticipantId: p(1),
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 2,
+        leg: 2,
+        seriesId: 'SF1',
+        homeParticipantId: p(1),
+        awayParticipantId: null,
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    matches.push({
+      round: startRound + 2,
+      leg: 1,
+      seriesId: 'SF2',
+      homeParticipantId: null,
+      awayParticipantId: p(2),
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 2,
+        leg: 2,
+        seriesId: 'SF2',
+        homeParticipantId: p(2),
+        awayParticipantId: null,
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    // F and TP
+    matches.push({
+      round: startRound + 3,
+      leg: 1,
+      seriesId: 'F',
+      homeParticipantId: null,
+      awayParticipantId: null,
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+    if (isTwoLegged) {
+      matches.push({
+        round: startRound + 3,
+        leg: 2,
+        seriesId: 'F',
+        homeParticipantId: null,
+        awayParticipantId: null,
+        status: 'PENDING_SUBMISSION',
+        isBye: false,
+        version: 1,
+        closedAt: null,
+      });
+    }
+    matches.push({
+      round: startRound + 3,
+      leg: 1,
+      seriesId: 'TP',
+      homeParticipantId: null,
+      awayParticipantId: null,
+      status: 'PENDING_SUBMISSION',
+      isBye: false,
+      version: 1,
+      closedAt: null,
+    });
+  }
+
+  return matches;
 }

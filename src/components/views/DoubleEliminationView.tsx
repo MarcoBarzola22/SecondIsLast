@@ -12,7 +12,6 @@ import { Panel } from '../ui/Panel';
 import { SeriesCard } from './SeriesCard';
 import { ParticipantsWalkoverPanel } from './ParticipantsWalkoverPanel';
 import { PodiumPanel } from './PodiumPanel';
-import { ManualMatchupsPanel } from './ManualMatchupsPanel';
 import {
   evaluateGrandFinal,
   isDoubleEliminationComplete,
@@ -120,9 +119,6 @@ export function DoubleEliminationView({
 
   return (
     <div className="space-y-6">
-      {/* Panel de Armado Manual de Cruces y Byes (RF-87) */}
-      <ManualMatchupsPanel mode="double_elimination" />
-
       <Panel
         title="Doble Eliminación (Winner & Loser Bracket)"
         subtitle={

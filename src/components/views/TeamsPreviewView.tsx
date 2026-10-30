@@ -6,17 +6,14 @@ import {
   AlertCircle,
   Sparkles,
   Trophy,
-  Plus,
-  X,
   ArrowRight,
   Dices,
   Clock,
   CheckCircle,
   CheckCircle2,
 } from 'lucide-react';
-import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
-import { PrimaryButton, SecondaryButton } from '../ui/Buttons';
+import { PrimaryButton } from '../ui/Buttons';
 import { Panel } from '../ui/Panel';
 import { DEFAULT_THEME_TEAMS } from '../../domain/teams';
 import { useCountdown } from '../../hooks/useCountdown';
@@ -49,7 +46,6 @@ export function TeamsPreviewView({
   participants = [],
   onProceedToFixture,
 }: TeamsPreviewViewProps) {
-  const { isAdmin } = useAuth();
   const { socket, isConnected } = useSocket();
 
   const [theme, setTheme] = useState<string>(initialTheme);
@@ -57,13 +53,6 @@ export function TeamsPreviewView({
   const [isCustom, setIsCustom] = useState<boolean>(false);
   const [assignmentMethod, setAssignmentMethod] = useState<'DIRECT_DRAW' | 'DRAFT_ORDER'>('DIRECT_DRAW');
   const [error, setError] = useState<string | null>(null);
-
-  // Admin Preload Modal state (RF-103)
-  const [isPreloadModalOpen, setIsPreloadModalOpen] = useState<boolean>(false);
-  const [editingTheme, setEditingTheme] = useState<string>(initialTheme);
-  const [editingTeamsText, setEditingTeamsText] = useState<string>('');
-  const [preloadError, setPreloadError] = useState<string | null>(null);
-  const [isSavingPreload, setIsSavingPreload] = useState<boolean>(false);
 
   // Synchronized Draw Animation state (RF-104)
   const [isDrawing, setIsDrawing] = useState<boolean>(false);
@@ -74,16 +63,17 @@ export function TeamsPreviewView({
   >([]);
   const [isDrawComplete, setIsDrawComplete] = useState<boolean>(false);
 
-  // Synchronized Voting for Assignment Method (T33, T34)
+  // Synchronized Voting for Assignment Method & Bracket Method (T33, T34, T45)
+  const [votingPhase, setVotingPhase] = useState<'ASSIGNMENT_METHOD' | 'BRACKET_METHOD'>('ASSIGNMENT_METHOD');
   const [votingExpiresAt, setVotingExpiresAt] = useState<string | null>(null);
   const [hasVotingEnded, setHasVotingEnded] = useState<boolean>(false);
-  const [votedChoice, setVotedChoice] = useState<'DIRECT_DRAW' | 'DRAFT_ORDER' | null>(null);
+  const [votedChoice, setVotedChoice] = useState<string | null>(null);
   const [votesCast, setVotesCast] = useState<number>(0);
   const [totalVoters, setTotalVoters] = useState<number>(participantCount);
   const [isSubmittingVote, setIsSubmittingVote] = useState<boolean>(false);
   const [winnerAnnouncement, setWinnerAnnouncement] = useState<string | null>(null);
   const [isRouletteActive, setIsRouletteActive] = useState<boolean>(false);
-  const [rouletteCandidate, setRouletteCandidate] = useState<'DIRECT_DRAW' | 'DRAFT_ORDER'>('DIRECT_DRAW');
+  const [rouletteCandidate, setRouletteCandidate] = useState<string>('DIRECT_DRAW');
   const [voteResult, setVoteResult] = useState<{
     winner: string;
     wasDraw?: boolean;
@@ -93,43 +83,59 @@ export function TeamsPreviewView({
 
   const votingCountdown = useCountdown(votingExpiresAt, 60);
 
-  // Start or synchronize assignment method voting session (T33, T34)
+  // Synchronize assignment method voting session without premature start (T33, T34, T44)
   useEffect(() => {
     let isMounted = true;
     async function initVoting() {
       if (!tournamentId) return;
+      if (isDrawing || isDrawComplete || hasVotingEnded) return;
+
       try {
-        const res = await fetch('/api/tournaments/start-voting', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ tournamentId, phase: 'ASSIGNMENT_METHOD' }),
+        // Query active tournament first to check if there is an active session
+        const activeRes = await fetch('/api/tournaments/active', {
+          headers: { Accept: 'application/json' },
           credentials: 'include',
         });
-        if (res.ok && isMounted) {
-          const data = await res.json();
-          const expires = data.expiresAt || data.session?.expiresAt;
-          if (typeof expires === 'string' && !isNaN(Date.parse(expires))) {
-            setVotingExpiresAt(expires);
-            setTotalVoters(data.totalVoters || data.session?.totalVoters || participantCount);
-            const isClosed = data.closed || data.session?.closed || data.session?.isClosed;
-            if (isClosed) {
-              setHasVotingEnded(true);
-              const winner = (data.winner || data.session?.winner || '').toUpperCase() === 'DRAFT_ORDER' ? 'DRAFT_ORDER' : 'DIRECT_DRAW';
-              setAssignmentMethod(winner);
-            } else {
-              setHasVotingEnded(false);
+        if (activeRes.ok && isMounted) {
+          const activeData = await activeRes.json();
+          const vs = activeData?.votingSession || activeData?.tournament?.votingSession;
+          if (vs && vs.phase === 'ASSIGNMENT_METHOD') {
+            if (vs.expiresAt && !isNaN(Date.parse(vs.expiresAt))) {
+              setVotingExpiresAt(vs.expiresAt);
             }
+            if (vs.totalVoters) setTotalVoters(vs.totalVoters);
+            if (vs.votesCast !== undefined) setVotesCast(vs.votesCast);
+            setHasVotingEnded(false);
+            return;
+          }
+          if (activeData?.tournament?.settings?.assignmentMethod || activeData?.tournament?.drawSession) {
+            return;
           }
         }
+
+        // Also check via socket vote:sync if available
+        if (socket) {
+          socket.emit('vote:sync', tournamentId, (res: any) => {
+            if (!isMounted) return;
+            if (res?.ok && res.session?.phase === 'ASSIGNMENT_METHOD') {
+              if (res.session.expiresAt && !isNaN(Date.parse(res.session.expiresAt))) {
+                setVotingExpiresAt(res.session.expiresAt);
+              }
+              if (res.session.totalVoters) setTotalVoters(res.session.totalVoters);
+              if (res.session.votesCast !== undefined) setVotesCast(res.session.votesCast);
+              setHasVotingEnded(false);
+            }
+          });
+        }
       } catch (err) {
-        console.warn('[TeamsPreviewView] Error starting assignment voting:', err);
+        console.warn('[TeamsPreviewView] Error checking active assignment voting:', err);
       }
     }
     initVoting();
     return () => {
       isMounted = false;
     };
-  }, [tournamentId, participantCount]);
+  }, [tournamentId, socket, isDrawing, isDrawComplete, hasVotingEnded]);
 
   // Fetch available teams for the current theme
   const fetchTeams = useCallback(async (targetTheme?: string) => {
@@ -191,8 +197,17 @@ export function TeamsPreviewView({
     tiedOptions?: string[],
     voteCounts?: Record<string, number>
   ) => {
-    const winner = winnerRaw?.toUpperCase() === 'DRAFT_ORDER' ? 'DRAFT_ORDER' : 'DIRECT_DRAW';
-    setAssignmentMethod(winner);
+    const upper = (winnerRaw || '').toUpperCase();
+    let winner = upper;
+    if (upper === 'DIRECT_MATCHUP_DRAW' || upper === 'PICK_BRACKET_SLOT') {
+      winner = upper;
+    } else if (upper === 'DRAFT_ORDER') {
+      winner = 'DRAFT_ORDER';
+      setAssignmentMethod('DRAFT_ORDER');
+    } else {
+      winner = 'DIRECT_DRAW';
+      setAssignmentMethod('DIRECT_DRAW');
+    }
     setHasVotingEnded(true);
     setVoteResult({
       winner,
@@ -202,7 +217,11 @@ export function TeamsPreviewView({
     });
 
     const winnerTitle =
-      winner === 'DIRECT_DRAW'
+      winner === 'DIRECT_MATCHUP_DRAW'
+        ? 'Sorteo de Enfrentamientos'
+        : winner === 'PICK_BRACKET_SLOT'
+        ? 'Elegir Ubicación en la Llave por Orden'
+        : winner === 'DIRECT_DRAW'
         ? 'Sorteo Directo de Equipos'
         : 'Sorteo de Orden de Elección (Draft)';
 
@@ -211,7 +230,10 @@ export function TeamsPreviewView({
 
     if (isTieOrZero) {
       setIsRouletteActive(true);
-      const candidates: Array<'DIRECT_DRAW' | 'DRAFT_ORDER'> = ['DIRECT_DRAW', 'DRAFT_ORDER'];
+      const candidates: string[] =
+        votingPhase === 'BRACKET_METHOD'
+          ? ['DIRECT_MATCHUP_DRAW', 'PICK_BRACKET_SLOT']
+          : ['DIRECT_DRAW', 'DRAFT_ORDER'];
       let idx = 0;
       let active = true;
       const startTime = Date.now();
@@ -284,7 +306,8 @@ export function TeamsPreviewView({
     };
 
     const handleVoteStarted = (payload: any) => {
-      if (payload.phase === 'ASSIGNMENT_METHOD') {
+      if (payload.phase === 'ASSIGNMENT_METHOD' || payload.phase === 'BRACKET_METHOD') {
+        setVotingPhase(payload.phase);
         if (typeof payload.expiresAt === 'string' && !isNaN(Date.parse(payload.expiresAt))) {
           setVotingExpiresAt(payload.expiresAt);
         }
@@ -292,18 +315,20 @@ export function TeamsPreviewView({
         setVotesCast(0);
         setHasVotingEnded(false);
         setVoteResult(null);
+        setVotedChoice(null);
+        setWinnerAnnouncement(null);
       }
     };
 
     const handleVoteUpdated = (payload: any) => {
-      if (payload.phase === 'ASSIGNMENT_METHOD') {
+      if (payload.phase === 'ASSIGNMENT_METHOD' || payload.phase === 'BRACKET_METHOD') {
         setVotesCast(payload.votesCast);
         if (payload.totalVoters) setTotalVoters(payload.totalVoters);
       }
     };
 
     const handleVoteEnded = (payload: any) => {
-      if (payload.phase === 'ASSIGNMENT_METHOD') {
+      if (payload.phase === 'ASSIGNMENT_METHOD' || payload.phase === 'BRACKET_METHOD') {
         announceWinnerAndAutoAdvance(
           payload.winner,
           payload.wasDraw,
@@ -373,8 +398,8 @@ export function TeamsPreviewView({
     }
   }, [votingExpiresAt, votingCountdown.isExpired, hasVotingEnded, tournamentId, announceWinnerAndAutoAdvance]);
 
-  // Confirm vote for assignment method directly from card buttons (T33, T34, T35)
-  const handleConfirmVote = async (choice: 'DIRECT_DRAW' | 'DRAFT_ORDER') => {
+  // Confirm vote for assignment method or bracket method directly from card buttons (T33, T34, T35, T45)
+  const handleConfirmVote = async (choice: string) => {
     if (isSubmittingVote || votedChoice) return;
     try {
       setIsSubmittingVote(true);
@@ -383,7 +408,7 @@ export function TeamsPreviewView({
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
           tournamentId,
-          phase: 'ASSIGNMENT_METHOD',
+          phase: votingPhase,
           choice,
         }),
         credentials: 'include',
@@ -408,54 +433,6 @@ export function TeamsPreviewView({
     }
   };
 
-  // Handle Admin Preload Save (RF-103)
-  const handleSavePreload = async () => {
-    if (!isAdmin) return;
-    try {
-      setIsSavingPreload(true);
-      setPreloadError(null);
-
-      const parsedTeams = editingTeamsText
-        .split('\n')
-        .map((t) => t.trim().replace(/\s+/g, ' '))
-        .filter((t) => t.length > 0);
-
-      const res = await fetch('/api/tournaments/teams', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          theme: editingTheme,
-          teams: parsedTeams,
-        }),
-        credentials: 'include',
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Error al precargar equipos.');
-      }
-
-      setTheme(data.theme);
-      setTeams(data.teams);
-      setIsCustom(true);
-      setIsPreloadModalOpen(false);
-    } catch (err: any) {
-      setPreloadError(err.message || 'Error al guardar los equipos precargados.');
-    } finally {
-      setIsSavingPreload(false);
-    }
-  };
-
-  // Open Preload Modal prefilled with current teams
-  const handleOpenPreloadModal = () => {
-    setEditingTheme(theme);
-    setEditingTeamsText(teams.join('\n'));
-    setPreloadError(null);
-    setIsPreloadModalOpen(true);
-  };
-
-
-
   const hasEnoughTeams = teams.length >= participantCount;
 
   return (
@@ -477,23 +454,10 @@ export function TeamsPreviewView({
                 {isCustom ? 'Roster personalizado por el Administrador' : 'Roster oficial predefinido'}
               </p>
             </div>
-
-            <div className="flex items-center gap-2">
-              {isAdmin && !isDrawComplete && (
-                <SecondaryButton
-                  type="button"
-                  onClick={handleOpenPreloadModal}
-                  className="text-xs px-3 py-2"
-                >
-                  <Plus className="h-3.5 w-3.5 mr-1" />
-                  <span>Editar / Precargar Equipos</span>
-                </SecondaryButton>
-              )}
-            </div>
           </div>
 
-          {/* Assignment Method Synchronized Voting & Selection (T35) */}
-          {!isDrawComplete && (
+          {/* Assignment Method or Bracket Method Synchronized Voting & Selection (T35, T45) */}
+          {(!isDrawComplete || votingPhase === 'BRACKET_METHOD') && (
             !hasVotingEnded ? (
               <div className="flex flex-col gap-6 rounded-2xl border-4 border-primary/60 bg-gradient-to-b from-primary/15 via-background/90 to-primary/10 p-6 sm:p-8 shadow-2xl glow-blue text-center">
                 <div className="flex flex-col items-center justify-center gap-2">
@@ -501,7 +465,9 @@ export function TeamsPreviewView({
                     <Clock className="h-4 w-4" /> Votación Obligatoria en Vivo (60s)
                   </div>
                   <h2 className="text-xl sm:text-2xl font-black font-display uppercase tracking-wide text-foreground">
-                    ¿Cómo asignamos los equipos?
+                    {votingPhase === 'BRACKET_METHOD'
+                      ? '¿Cómo definimos los cruces eliminatorios?'
+                      : '¿Cómo asignamos los equipos?'}
                   </h2>
                   <p className="text-xs sm:text-sm text-muted-foreground max-w-md">
                     Hacé clic directamente en una de las dos opciones para votar antes de que termine el tiempo.
@@ -526,79 +492,151 @@ export function TeamsPreviewView({
                   </div>
                 </div>
 
-                {/* Las dos tarjetas son botones directos para votar (T35) */}
+                {/* Las dos tarjetas son botones directos para votar (T35, T45) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                  <button
-                    type="button"
-                    disabled={isSubmittingVote || Boolean(votedChoice)}
-                    onClick={() => handleConfirmVote('DIRECT_DRAW')}
-                    className={`flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-3 text-center transition-all duration-200 ${
-                      votedChoice === 'DIRECT_DRAW'
-                        ? 'border-primary bg-primary/30 text-foreground font-black shadow-2xl glow-green scale-[1.03] ring-2 ring-primary'
-                        : 'border-border/80 bg-secondary/40 text-muted-foreground hover:border-primary/60 hover:bg-secondary/70 hover:scale-[1.02]'
-                    } disabled:cursor-not-allowed`}
-                  >
-                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/20 text-primary border border-primary/40 text-3xl">
-                      🎲
-                    </div>
-                    <div className="space-y-1">
-                      <h3 className="font-display font-black text-base sm:text-lg text-primary flex items-center justify-center gap-2">
-                        Sorteo Directo de Equipos
-                        {votedChoice === 'DIRECT_DRAW' && <CheckCircle2 className="h-5 w-5 text-primary" />}
-                      </h3>
-                      <p className="text-xs text-muted-foreground">
-                        Cada jugador recibe un equipo al azar al instante mediante la ruleta animada.
-                      </p>
-                    </div>
-                    {votedChoice === 'DIRECT_DRAW' ? (
-                      <span className="text-xs font-bold text-primary bg-primary/20 px-3 py-1 rounded-full border border-primary">
-                        ✓ Tu Voto Registrado
-                      </span>
-                    ) : (
-                      <span className="text-xs font-bold text-muted-foreground bg-background/60 px-3 py-1 rounded-full border border-border">
-                        {isSubmittingVote ? 'Enviando...' : 'Clic para Votar'}
-                      </span>
-                    )}
-                  </button>
+                  {votingPhase === 'BRACKET_METHOD' ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled={isSubmittingVote || Boolean(votedChoice)}
+                        onClick={() => handleConfirmVote('DIRECT_MATCHUP_DRAW')}
+                        className={`flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-3 text-center transition-all duration-200 ${
+                          votedChoice === 'DIRECT_MATCHUP_DRAW'
+                            ? 'border-primary bg-primary/30 text-foreground font-black shadow-2xl glow-green scale-[1.03] ring-2 ring-primary'
+                            : 'border-border/80 bg-secondary/40 text-muted-foreground hover:border-primary/60 hover:bg-secondary/70 hover:scale-[1.02]'
+                        } disabled:cursor-not-allowed`}
+                      >
+                        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/20 text-primary border border-primary/40 text-3xl">
+                          🎲
+                        </div>
+                        <div className="space-y-1">
+                          <h3 className="font-display font-black text-base sm:text-lg text-primary flex items-center justify-center gap-2">
+                            Sorteo de Enfrentamientos
+                            {votedChoice === 'DIRECT_MATCHUP_DRAW' && <CheckCircle2 className="h-5 w-5 text-primary" />}
+                          </h3>
+                          <p className="text-xs text-muted-foreground">
+                            El sistema sortea automáticamente las llaves eliminatorias y genera el fixture en instantes.
+                          </p>
+                        </div>
+                        {votedChoice === 'DIRECT_MATCHUP_DRAW' ? (
+                          <span className="text-xs font-bold text-primary bg-primary/20 px-3 py-1 rounded-full border border-primary">
+                            ✓ Tu Voto Registrado
+                          </span>
+                        ) : (
+                          <span className="text-xs font-bold text-muted-foreground bg-background/60 px-3 py-1 rounded-full border border-border">
+                            {isSubmittingVote ? 'Enviando...' : 'Clic para Votar'}
+                          </span>
+                        )}
+                      </button>
 
-                  <button
-                    type="button"
-                    disabled={isSubmittingVote || Boolean(votedChoice)}
-                    onClick={() => handleConfirmVote('DRAFT_ORDER')}
-                    className={`flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-3 text-center transition-all duration-200 ${
-                      votedChoice === 'DRAFT_ORDER'
-                        ? 'border-accent bg-accent/30 text-foreground font-black shadow-2xl glow-orange scale-[1.03] ring-2 ring-accent'
-                        : 'border-border/80 bg-secondary/40 text-muted-foreground hover:border-accent/60 hover:bg-secondary/70 hover:scale-[1.02]'
-                    } disabled:cursor-not-allowed`}
-                  >
-                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent/20 text-accent border border-accent/40 text-3xl">
-                      📋
-                    </div>
-                    <div className="space-y-1">
-                      <h3 className="font-display font-black text-base sm:text-lg text-accent flex items-center justify-center gap-2">
-                        Sorteo de Orden de Draft
-                        {votedChoice === 'DRAFT_ORDER' && <CheckCircle2 className="h-5 w-5 text-accent" />}
-                      </h3>
-                      <p className="text-xs text-muted-foreground">
-                        Se sortea el orden de turnos (1º, 2º, 3º...) con 20 segundos por turno para elegir en vivo.
-                      </p>
-                    </div>
-                    {votedChoice === 'DRAFT_ORDER' ? (
-                      <span className="text-xs font-bold text-accent bg-accent/20 px-3 py-1 rounded-full border border-accent">
-                        ✓ Tu Voto Registrado
-                      </span>
-                    ) : (
-                      <span className="text-xs font-bold text-muted-foreground bg-background/60 px-3 py-1 rounded-full border border-border">
-                        {isSubmittingVote ? 'Enviando...' : 'Clic para Votar'}
-                      </span>
-                    )}
-                  </button>
+                      <button
+                        type="button"
+                        disabled={isSubmittingVote || Boolean(votedChoice)}
+                        onClick={() => handleConfirmVote('PICK_BRACKET_SLOT')}
+                        className={`flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-3 text-center transition-all duration-200 ${
+                          votedChoice === 'PICK_BRACKET_SLOT'
+                            ? 'border-accent bg-accent/30 text-foreground font-black shadow-2xl glow-orange scale-[1.03] ring-2 ring-accent'
+                            : 'border-border/80 bg-secondary/40 text-muted-foreground hover:border-accent/60 hover:bg-secondary/70 hover:scale-[1.02]'
+                        } disabled:cursor-not-allowed`}
+                      >
+                        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent/20 text-accent border border-accent/40 text-3xl">
+                          📋
+                        </div>
+                        <div className="space-y-1">
+                          <h3 className="font-display font-black text-base sm:text-lg text-accent flex items-center justify-center gap-2">
+                            Elegir Ubicación en la Llave por Orden
+                            {votedChoice === 'PICK_BRACKET_SLOT' && <CheckCircle2 className="h-5 w-5 text-accent" />}
+                          </h3>
+                          <p className="text-xs text-muted-foreground">
+                            Se sortea el orden de turnos (1º, 2º, 3º...) y cada participante elige estratégicamente su casillero en la llave en vivo.
+                          </p>
+                        </div>
+                        {votedChoice === 'PICK_BRACKET_SLOT' ? (
+                          <span className="text-xs font-bold text-accent bg-accent/20 px-3 py-1 rounded-full border border-accent">
+                            ✓ Tu Voto Registrado
+                          </span>
+                        ) : (
+                          <span className="text-xs font-bold text-muted-foreground bg-background/60 px-3 py-1 rounded-full border border-border">
+                            {isSubmittingVote ? 'Enviando...' : 'Clic para Votar'}
+                          </span>
+                        )}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={isSubmittingVote || Boolean(votedChoice)}
+                        onClick={() => handleConfirmVote('DIRECT_DRAW')}
+                        className={`flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-3 text-center transition-all duration-200 ${
+                          votedChoice === 'DIRECT_DRAW'
+                            ? 'border-primary bg-primary/30 text-foreground font-black shadow-2xl glow-green scale-[1.03] ring-2 ring-primary'
+                            : 'border-border/80 bg-secondary/40 text-muted-foreground hover:border-primary/60 hover:bg-secondary/70 hover:scale-[1.02]'
+                        } disabled:cursor-not-allowed`}
+                      >
+                        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/20 text-primary border border-primary/40 text-3xl">
+                          🎲
+                        </div>
+                        <div className="space-y-1">
+                          <h3 className="font-display font-black text-base sm:text-lg text-primary flex items-center justify-center gap-2">
+                            Sorteo Directo de Equipos
+                            {votedChoice === 'DIRECT_DRAW' && <CheckCircle2 className="h-5 w-5 text-primary" />}
+                          </h3>
+                          <p className="text-xs text-muted-foreground">
+                            Cada jugador recibe un equipo al azar al instante mediante la ruleta animada.
+                          </p>
+                        </div>
+                        {votedChoice === 'DIRECT_DRAW' ? (
+                          <span className="text-xs font-bold text-primary bg-primary/20 px-3 py-1 rounded-full border border-primary">
+                            ✓ Tu Voto Registrado
+                          </span>
+                        ) : (
+                          <span className="text-xs font-bold text-muted-foreground bg-background/60 px-3 py-1 rounded-full border border-border">
+                            {isSubmittingVote ? 'Enviando...' : 'Clic para Votar'}
+                          </span>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={isSubmittingVote || Boolean(votedChoice)}
+                        onClick={() => handleConfirmVote('DRAFT_ORDER')}
+                        className={`flex flex-col items-center justify-center gap-3 p-6 rounded-2xl border-3 text-center transition-all duration-200 ${
+                          votedChoice === 'DRAFT_ORDER'
+                            ? 'border-accent bg-accent/30 text-foreground font-black shadow-2xl glow-orange scale-[1.03] ring-2 ring-accent'
+                            : 'border-border/80 bg-secondary/40 text-muted-foreground hover:border-accent/60 hover:bg-secondary/70 hover:scale-[1.02]'
+                        } disabled:cursor-not-allowed`}
+                      >
+                        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent/20 text-accent border border-accent/40 text-3xl">
+                          📋
+                        </div>
+                        <div className="space-y-1">
+                          <h3 className="font-display font-black text-base sm:text-lg text-accent flex items-center justify-center gap-2">
+                            Sorteo de Orden de Draft
+                            {votedChoice === 'DRAFT_ORDER' && <CheckCircle2 className="h-5 w-5 text-accent" />}
+                          </h3>
+                          <p className="text-xs text-muted-foreground">
+                            Se sortea el orden de turnos (1º, 2º, 3º...) con 20 segundos por turno para elegir en vivo.
+                          </p>
+                        </div>
+                        {votedChoice === 'DRAFT_ORDER' ? (
+                          <span className="text-xs font-bold text-accent bg-accent/20 px-3 py-1 rounded-full border border-accent">
+                            ✓ Tu Voto Registrado
+                          </span>
+                        ) : (
+                          <span className="text-xs font-bold text-muted-foreground bg-background/60 px-3 py-1 rounded-full border border-border">
+                            {isSubmittingVote ? 'Enviando...' : 'Clic para Votar'}
+                          </span>
+                        )}
+                      </button>
+                    </>
+                  )}
                 </div>
 
                 {votedChoice ? (
                   <p className="text-xs font-bold text-primary flex items-center justify-center gap-2 animate-pulse pt-2">
                     <CheckCircle className="h-4 w-4" />
-                    ¡Voto confirmado! Al expirar el tiempo (00:00) se anunciará el ganador y se iniciará la asignación.
+                    ¡Voto confirmado! Al expirar el tiempo (00:00) se anunciará el ganador y avanzará la fase.
                   </p>
                 ) : (
                   <p className="text-xs text-muted-foreground pt-2">
@@ -923,83 +961,6 @@ export function TeamsPreviewView({
             ))}
           </div>
         </Panel>
-      )}
-
-      {/* Admin Preload Modal (RF-103) */}
-      {isPreloadModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-          <div className="w-full max-w-lg rounded-lg border border-border bg-card p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-border/60 pb-3">
-              <h3 className="font-display text-lg font-black text-foreground flex items-center gap-2">
-                <Shield className="h-5 w-5 text-primary" />
-                Precargar Equipos por Temática (Admin)
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsPreloadModalOpen(false)}
-                className="text-muted-foreground hover:text-foreground cursor-pointer"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {preloadError && (
-              <div className="flex items-center gap-2 rounded bg-destructive/15 border border-destructive/40 p-3 text-xs text-destructive">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                <span>{preloadError}</span>
-              </div>
-            )}
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1 font-mono">
-                  Nombre de la Temática
-                </label>
-                <input
-                  type="text"
-                  value={editingTheme}
-                  onChange={(e) => setEditingTheme(e.target.value)}
-                  className="w-full rounded border border-border bg-secondary/50 px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
-                  placeholder="Ej. Apertura 2006, Clásicos PES 6..."
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1 font-mono">
-                  Listado de Equipos (un equipo por línea)
-                </label>
-                <textarea
-                  rows={8}
-                  value={editingTeamsText}
-                  onChange={(e) => setEditingTeamsText(e.target.value)}
-                  className="w-full rounded border border-border bg-secondary/50 p-3 font-mono text-xs text-foreground focus:border-primary focus:outline-none"
-                  placeholder="Boca Juniors&#10;River Plate&#10;Estudiantes LP&#10;Vélez Sarsfield..."
-                />
-                <span className="text-[11px] text-muted-foreground">
-                  Mínimo 4 equipos sin duplicados. Podés pegar una lista completa.
-                </span>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-border/60">
-              <SecondaryButton
-                type="button"
-                onClick={() => setIsPreloadModalOpen(false)}
-                className="text-xs px-4 py-2"
-              >
-                Cancelar
-              </SecondaryButton>
-              <PrimaryButton
-                type="button"
-                disabled={isSavingPreload}
-                onClick={handleSavePreload}
-                className="text-xs px-4 py-2 glow-green"
-              >
-                <span>{isSavingPreload ? 'Guardando...' : 'Guardar Equipos'}</span>
-              </PrimaryButton>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* Cartel Ruleta de Desempate / Sorteo en Vivo (2.5 segundos) (T41) */}

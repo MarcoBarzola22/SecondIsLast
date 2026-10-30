@@ -63,21 +63,7 @@ export class HistoryService {
    */
   async getHeadToHead(playerAId?: string, playerBId?: string) {
     if (playerAId && playerBId) {
-      const idA = playerAId < playerBId ? playerAId : playerBId;
-      const idB = playerAId < playerBId ? playerBId : playerAId;
-
-      return this.prisma.headToHeadRecord.findUnique({
-        where: {
-          playerAId_playerBId: {
-            playerAId: idA,
-            playerBId: idB,
-          },
-        },
-        include: {
-          playerA: true,
-          playerB: true,
-        },
-      });
+      return this.getDetailedH2H(playerAId, playerBId);
     }
 
     return this.prisma.headToHeadRecord.findMany({
@@ -87,6 +73,510 @@ export class HistoryService {
       },
       orderBy: { matchesPlayed: 'desc' },
     });
+  }
+
+  /**
+   * Retrieves all players from PostgreSQL database (T47).
+   */
+  async getAllPlayers() {
+    return this.prisma.player.findMany({
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+    });
+  }
+
+  /**
+   * Resets historical records and completed tournaments (T47 - Admin reset).
+   */
+  async resetHistory() {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.annualRankingEntry.deleteMany({});
+      await tx.headToHeadRecord.deleteMany({});
+      await tx.historicalStats.deleteMany({});
+      await tx.tournament.deleteMany({
+        where: { status: TournamentStatus.COMPLETED },
+      });
+      return { success: true };
+    });
+  }
+
+  /**
+   * Retrieves all-time aggregated annual ranking entries (T47).
+   */
+  async getAllTimeAnnualRanking() {
+    const entries = await this.prisma.annualRankingEntry.findMany({
+      include: { player: true },
+    });
+
+    const playerMap = new Map<string, any>();
+    for (const e of entries) {
+      if (!playerMap.has(e.playerId)) {
+        playerMap.set(e.playerId, {
+          playerId: e.playerId,
+          player: e.player,
+          points: 0,
+          tournamentsPlayed: 0,
+          podiums: 0,
+          yellowCards: 0,
+          redCards: 0,
+        });
+      }
+      const p = playerMap.get(e.playerId)!;
+      p.points += e.points;
+      p.tournamentsPlayed += e.tournamentsPlayed;
+      p.podiums += e.podiums;
+      p.yellowCards += e.yellowCards;
+      p.redCards += e.redCards;
+    }
+
+    return Array.from(playerMap.values()).sort((a, b) => b.points - a.points);
+  }
+
+  /**
+   * Calculates comprehensive Head-to-Head history between two players (T47).
+   * Includes total match stats, series/eliminatorias history, penalties, and chronological encounter history.
+   */
+  async getDetailedH2H(playerAId: string, playerBId: string) {
+    const idA = playerAId < playerBId ? playerAId : playerBId;
+    const idB = playerAId < playerBId ? playerBId : playerAId;
+
+    const baseRecord = await this.prisma.headToHeadRecord.findUnique({
+      where: {
+        playerAId_playerBId: {
+          playerAId: idA,
+          playerBId: idB,
+        },
+      },
+      include: {
+        playerA: true,
+        playerB: true,
+      },
+    });
+
+    const tournaments = await this.prisma.tournament.findMany({
+      where: {
+        status: TournamentStatus.COMPLETED,
+        participants: {
+          some: { playerId: { in: [playerAId, playerBId] } },
+        },
+      },
+      include: {
+        participants: { include: { player: true } },
+        matches: {
+          include: {
+            homeParticipant: { include: { player: true } },
+            awayParticipant: { include: { player: true } },
+            penaltiesWinner: { include: { player: true } },
+          },
+          orderBy: [{ round: 'asc' }, { leg: 'asc' }, { createdAt: 'asc' }],
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    let seriesPlayed = 0;
+    let seriesWonA = 0;
+    let seriesWonB = 0;
+    let penaltiesPlayed = 0;
+    let penaltiesWonA = 0;
+    let penaltiesWonB = 0;
+    const encountersHistory: Array<{
+      id: string;
+      tournamentId: string;
+      tournamentName: string;
+      tournamentDate: string;
+      format: string;
+      stage: string;
+      teamA: string;
+      teamB: string;
+      scoreText: string;
+      penaltiesText: string | null;
+      winnerPlayerId: string | null;
+      winnerName: string | null;
+      outcomeBadge: string;
+    }> = [];
+
+    const formatStageName = (seriesId: string | null, round: number, format: string | null) => {
+      if (!seriesId || format === 'LEAGUE') return `Fecha ${round}`;
+      const s = seriesId.toUpperCase();
+      if (s === 'F' || s.startsWith('F_')) return 'Final 🏆';
+      if (s === 'GF1' || s === 'GF2') return 'Gran Final 🏆';
+      if (s === 'TP') return '3er Puesto 🥉';
+      if (s.startsWith('SF')) return 'Semifinal';
+      if (s.startsWith('QF')) return 'Cuartos de Final';
+      if (s.startsWith('R16')) return 'Octavos de Final';
+      if (s.startsWith('WB_F')) return 'Final Llave Ganadores';
+      if (s.startsWith('LB_F')) return 'Final Llave Perdedores';
+      if (s.startsWith('WB_')) return 'Llave Ganadores';
+      if (s.startsWith('LB_')) return 'Llave Perdedores';
+      return `Ronda ${round}`;
+    };
+
+    for (const t of tournaments) {
+      const partA = t.participants.find((p) => p.playerId === playerAId);
+      const partB = t.participants.find((p) => p.playerId === playerBId);
+      if (!partA || !partB) continue;
+
+      const directMatches = t.matches.filter(
+        (m) =>
+          (m.homeParticipantId === partA.id && m.awayParticipantId === partB.id) ||
+          (m.homeParticipantId === partB.id && m.awayParticipantId === partA.id)
+      );
+      if (directMatches.length === 0) continue;
+
+      const nameA = `${partA.player.firstName} ${partA.player.lastName}`.trim();
+      const nameB = `${partB.player.firstName} ${partB.player.lastName}`.trim();
+
+      const isKnockoutFormat = t.format === 'BRACKET' || t.format === 'DOUBLE_ELIMINATION';
+
+      if (isKnockoutFormat || (t.format === 'LEAGUE_PLAYOFFS' && directMatches.some((m) => m.seriesId))) {
+        // Group by seriesId
+        const seriesMap = new Map<string, typeof directMatches>();
+        for (const m of directMatches) {
+          const sId = m.seriesId || m.id;
+          if (!seriesMap.has(sId)) seriesMap.set(sId, []);
+          seriesMap.get(sId)!.push(m);
+        }
+
+        for (const [sId, sMatches] of seriesMap.entries()) {
+          seriesPlayed++;
+          const winnerRes = determineSeriesWinner(sMatches);
+          const wonA = winnerRes.winnerId === partA.id;
+          const wonB = winnerRes.winnerId === partB.id;
+
+          if (wonA) seriesWonA++;
+          if (wonB) seriesWonB++;
+
+          const penMatch = sMatches.find((m) => m.penaltiesWinnerId);
+          let penaltiesText: string | null = null;
+          if (penMatch) {
+            penaltiesPlayed++;
+            if (penMatch.penaltiesWinnerId === partA.id) {
+              penaltiesWonA++;
+              penaltiesText = `🎯 ${partA.player.firstName} ganó por penales`;
+            } else if (penMatch.penaltiesWinnerId === partB.id) {
+              penaltiesWonB++;
+              penaltiesText = `🎯 ${partB.player.firstName} ganó por penales`;
+            }
+          }
+
+          let scoreText = '';
+          if (sMatches.length === 1) {
+            const m = sMatches[0];
+            const scA = m.homeParticipantId === partA.id ? m.homeScore ?? 0 : m.awayScore ?? 0;
+            const scB = m.homeParticipantId === partA.id ? m.awayScore ?? 0 : m.homeScore ?? 0;
+            scoreText = `${scA} - ${scB}`;
+          } else {
+            const leg1 = sMatches.find((m) => m.leg === 1) || sMatches[0];
+            const leg2 = sMatches.find((m) => m.leg === 2) || sMatches[1];
+            const l1A = leg1.homeParticipantId === partA.id ? leg1.homeScore ?? 0 : leg1.awayScore ?? 0;
+            const l1B = leg1.homeParticipantId === partA.id ? leg1.awayScore ?? 0 : leg1.homeScore ?? 0;
+            const l2A = leg2.homeParticipantId === partA.id ? leg2.homeScore ?? 0 : leg2.awayScore ?? 0;
+            const l2B = leg2.homeParticipantId === partA.id ? leg2.awayScore ?? 0 : leg2.homeScore ?? 0;
+            const totA = l1A + l2A;
+            const totB = l1B + l2B;
+            scoreText = `Ida: ${l1A}-${l1B} | Vuelta: ${l2A}-${l2B} (Global ${totA}-${totB})`;
+          }
+
+          const stage = formatStageName(sId, sMatches[0].round, t.format);
+          const isFinal = stage.includes('Final');
+
+          let outcomeBadge = 'Serie empatada';
+          if (wonA) {
+            outcomeBadge = isFinal ? `🏆 ${partA.player.firstName} Campeón` : `✅ ${partA.player.firstName} avanzó de ronda`;
+          } else if (wonB) {
+            outcomeBadge = isFinal ? `🏆 ${partB.player.firstName} Campeón` : `✅ ${partB.player.firstName} avanzó de ronda`;
+          }
+
+          encountersHistory.push({
+            id: sId,
+            tournamentId: t.id,
+            tournamentName: t.name,
+            tournamentDate: t.createdAt.toISOString(),
+            format: t.format || 'BRACKET',
+            stage,
+            teamA: partA.teamName || 'Sin equipo',
+            teamB: partB.teamName || 'Sin equipo',
+            scoreText,
+            penaltiesText,
+            winnerPlayerId: wonA ? playerAId : wonB ? playerBId : null,
+            winnerName: wonA ? nameA : wonB ? nameB : null,
+            outcomeBadge,
+          });
+        }
+      } else {
+        // Individual league/group matches
+        for (const m of directMatches) {
+          const scA = m.homeParticipantId === partA.id ? m.homeScore ?? 0 : m.awayScore ?? 0;
+          const scB = m.homeParticipantId === partA.id ? m.awayScore ?? 0 : m.homeScore ?? 0;
+          const wonA = scA > scB;
+          const wonB = scB > scA;
+
+          encountersHistory.push({
+            id: m.id,
+            tournamentId: t.id,
+            tournamentName: t.name,
+            tournamentDate: t.createdAt.toISOString(),
+            format: t.format || 'LEAGUE',
+            stage: formatStageName(m.seriesId, m.round, t.format),
+            teamA: partA.teamName || 'Sin equipo',
+            teamB: partB.teamName || 'Sin equipo',
+            scoreText: `${scA} - ${scB}`,
+            penaltiesText: null,
+            winnerPlayerId: wonA ? playerAId : wonB ? playerBId : null,
+            winnerName: wonA ? nameA : wonB ? nameB : null,
+            outcomeBadge: wonA ? `Ganó ${partA.player.firstName}` : wonB ? `Ganó ${partB.player.firstName}` : 'Empate',
+          });
+        }
+      }
+    }
+
+    const isDirectOrder = baseRecord ? baseRecord.playerAId === playerAId : true;
+    const matchesPlayed = baseRecord?.matchesPlayed ?? encountersHistory.length;
+    const winsA = baseRecord ? (isDirectOrder ? baseRecord.winsA : baseRecord.winsB) : encountersHistory.filter((e) => e.winnerPlayerId === playerAId).length;
+    const winsB = baseRecord ? (isDirectOrder ? baseRecord.winsB : baseRecord.winsA) : encountersHistory.filter((e) => e.winnerPlayerId === playerBId).length;
+    const draws = baseRecord ? baseRecord.draws : encountersHistory.filter((e) => !e.winnerPlayerId).length;
+    const goalsA = baseRecord ? (isDirectOrder ? baseRecord.goalsA : baseRecord.goalsB) : 0;
+    const goalsB = baseRecord ? (isDirectOrder ? baseRecord.goalsB : baseRecord.goalsA) : 0;
+
+    return {
+      playerAId,
+      playerBId,
+      playerA: baseRecord?.playerA ?? null,
+      playerB: baseRecord?.playerB ?? null,
+      matchesPlayed,
+      winsA,
+      winsB,
+      draws,
+      goalsA,
+      goalsB,
+      seriesPlayed,
+      seriesWonA,
+      seriesWonB,
+      penaltiesPlayed,
+      penaltiesWonA,
+      penaltiesWonB,
+      encountersHistory,
+    };
+  }
+
+  /**
+   * Retrieves full profile and historical performance for a player (T47).
+   */
+  async getPlayerProfile(playerId: string) {
+    const player = await this.prisma.player.findUnique({
+      where: { id: playerId },
+      include: {
+        stats: true,
+      },
+    });
+
+    if (!player) {
+      throw new NotFoundError('Jugador no encontrado.');
+    }
+
+    const tournaments = await this.prisma.tournament.findMany({
+      where: {
+        status: TournamentStatus.COMPLETED,
+        participants: {
+          some: { playerId },
+        },
+      },
+      include: {
+        participants: { include: { player: true } },
+        matches: {
+          include: {
+            homeParticipant: { include: { player: true } },
+            awayParticipant: { include: { player: true } },
+            penaltiesWinner: { include: { player: true } },
+          },
+          orderBy: [{ round: 'asc' }, { leg: 'asc' }, { createdAt: 'asc' }],
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    let titles = 0;
+    let runnerUps = 0;
+    let thirdPlaces = 0;
+    let fourthPlaces = 0;
+    let podiums = 0;
+
+    let seriesPlayed = 0;
+    let seriesWon = 0;
+    let seriesLost = 0;
+
+    let penaltiesPlayed = 0;
+    let penaltiesWon = 0;
+    let penaltiesLost = 0;
+
+    let pj = 0;
+    let pg = 0;
+    let pe = 0;
+    let pp = 0;
+    let gf = 0;
+    let gc = 0;
+    let yellowCards = 0;
+    let redCards = 0;
+
+    const teamsUsed: Array<{
+      teamName: string;
+      tournamentName: string;
+      tournamentDate: string;
+      placement: string;
+      isChampion: boolean;
+    }> = [];
+
+    for (const t of tournaments) {
+      const part = t.participants.find((p) => p.playerId === playerId);
+      if (!part) continue;
+
+      const podium = this.derivePodium(t, t.matches);
+      const isChamp = podium.champion === playerId;
+      const isRunner = podium.runnerUp === playerId;
+      const isThird = podium.third === playerId;
+      const isFourth = podium.fourth === playerId;
+
+      if (isChamp) {
+        titles++;
+        podiums++;
+      } else if (isRunner) {
+        runnerUps++;
+        podiums++;
+      } else if (isThird) {
+        thirdPlaces++;
+        podiums++;
+      } else if (isFourth) {
+        fourthPlaces++;
+      }
+
+      let placement = 'Fase de Grupos / Eliminado';
+      if (isChamp) placement = 'Campeón 🏆';
+      else if (isRunner) placement = 'Subcampeón 🥈';
+      else if (isThird) placement = '3° Puesto 🥉';
+      else if (isFourth) placement = '4° Puesto';
+
+      teamsUsed.push({
+        teamName: part.teamName || 'Sin equipo',
+        tournamentName: t.name,
+        tournamentDate: t.createdAt.toISOString(),
+        placement,
+        isChampion: isChamp,
+      });
+
+      // Matches involving this participant
+      const pMatches = t.matches.filter(
+        (m) => (m.homeParticipantId === part.id || m.awayParticipantId === part.id) && !m.isBye
+      );
+
+      for (const m of pMatches) {
+        pj++;
+        const isHome = m.homeParticipantId === part.id;
+        const hScore = m.homeScore ?? 0;
+        const aScore = m.awayScore ?? 0;
+        const myScore = isHome ? hScore : aScore;
+        const oppScore = isHome ? aScore : hScore;
+
+        gf += myScore;
+        gc += oppScore;
+        yellowCards += isHome ? m.homeYellowCards ?? 0 : m.awayYellowCards ?? 0;
+        redCards += isHome ? m.homeRedCards ?? 0 : m.awayRedCards ?? 0;
+
+        if (myScore > oppScore) pg++;
+        else if (myScore < oppScore) pp++;
+        else pe++;
+
+        if (m.penaltiesWinnerId) {
+          penaltiesPlayed++;
+          if (m.penaltiesWinnerId === part.id) penaltiesWon++;
+          else penaltiesLost++;
+        }
+      }
+
+      // Knockout series
+      const isKnockoutFormat = t.format === 'BRACKET' || t.format === 'DOUBLE_ELIMINATION';
+      if (isKnockoutFormat || (t.format === 'LEAGUE_PLAYOFFS' && pMatches.some((m) => m.seriesId))) {
+        const seriesMap = new Map<string, typeof pMatches>();
+        for (const m of pMatches) {
+          const sId = m.seriesId || m.id;
+          if (!seriesMap.has(sId)) seriesMap.set(sId, []);
+          seriesMap.get(sId)!.push(m);
+        }
+
+        for (const [, sMatches] of seriesMap.entries()) {
+          seriesPlayed++;
+          const winnerRes = determineSeriesWinner(sMatches);
+          if (winnerRes.winnerId === part.id) {
+            seriesWon++;
+          } else if (winnerRes.loserId === part.id || (winnerRes.winnerId && winnerRes.winnerId !== part.id)) {
+            seriesLost++;
+          }
+        }
+      }
+    }
+
+    const tournamentsPlayed = tournaments.length;
+    const effectivenessPct = tournamentsPlayed > 0 ? (podiums / tournamentsPlayed) * 100 : 0;
+    const titlePct = tournamentsPlayed > 0 ? (titles / tournamentsPlayed) * 100 : 0;
+    const seriesEffectivenessPct = seriesPlayed > 0 ? (seriesWon / seriesPlayed) * 100 : 0;
+    const penaltiesEffectivenessPct = penaltiesPlayed > 0 ? (penaltiesWon / penaltiesPlayed) * 100 : 0;
+
+    const pendingYellows = player.pendingYellowCards ?? 0;
+    const pendingReds = player.pendingRedCards ?? 0;
+    const suspendedDates = Math.floor(pendingYellows / 4) + pendingReds;
+
+    return {
+      player: {
+        id: player.id,
+        firstName: player.firstName,
+        lastName: player.lastName,
+        pendingYellowCards: pendingYellows,
+        pendingRedCards: pendingReds,
+        suspendedDates,
+      },
+      career: {
+        tournamentsPlayed,
+        titles,
+        runnerUps,
+        thirdPlaces,
+        fourthPlaces,
+        podiums,
+        effectivenessPct: Number(effectivenessPct.toFixed(1)),
+        titlePct: Number(titlePct.toFixed(1)),
+      },
+      manoAMano: {
+        seriesPlayed,
+        seriesWon,
+        seriesLost,
+        seriesEffectivenessPct: Number(seriesEffectivenessPct.toFixed(1)),
+        penaltiesPlayed,
+        penaltiesWon,
+        penaltiesLost,
+        penaltiesEffectivenessPct: Number(penaltiesEffectivenessPct.toFixed(1)),
+      },
+      stats: {
+        pj,
+        pg,
+        pe,
+        pp,
+        gf,
+        gc,
+        dg: gf - gc,
+        yellowCards,
+        redCards,
+      },
+      discipline: {
+        pendingYellowCards: pendingYellows,
+        pendingRedCards: pendingReds,
+        suspendedDates,
+        statusText:
+          suspendedDates > 0
+            ? `🚨 Sancionado: Debe ${suspendedDates} fecha${suspendedDates > 1 ? 's' : ''} (Su mejor jugador no puede jugar el próximo partido)`
+            : pendingYellows > 0
+            ? `Acumula ${pendingYellows % 4}/4 amarillas hacia la próxima sanción`
+            : 'Limpio sin tarjetas pendientes',
+      },
+      teamsUsed,
+    };
   }
 
   /**

@@ -46,6 +46,14 @@ export function clearActiveDrawSessions(): void {
   activeDrawSessions.clear();
 }
 
+export function cancelDrawAnimation(tournamentId: string): void {
+  const session = activeDrawSessions.get(tournamentId);
+  if (session?.timer) {
+    clearInterval(session.timer);
+  }
+  activeDrawSessions.delete(tournamentId);
+}
+
 /**
  * Initiates and broadcasts a synchronized frame-by-frame draw animation to tournament room (RF-104).
  */

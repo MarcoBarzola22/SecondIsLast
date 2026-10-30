@@ -14,6 +14,7 @@ import {
   getMatchLockStatus,
   MatchForLock,
 } from '../domain/sequentialLock.js';
+import { buildPlayoffMatchesFromQualified } from '../domain/fixture.js';
 import {
   ConflictError,
   NotFoundError,
@@ -126,6 +127,10 @@ export function getSeriesAdvancementTarget(
 export function determineSeriesWinner(
   seriesMatches: any[]
 ): { winnerId: string | null; loserId: string | null } {
+  if (!seriesMatches || seriesMatches.length === 0) {
+    return { winnerId: null, loserId: null };
+  }
+
   if (seriesMatches.length === 1) {
     const m = seriesMatches[0];
     const homeGoals = m.homeScore ?? 0;
@@ -658,6 +663,8 @@ export class MatchService {
     standings: any[];
     bracket: any[];
     unblockedParticipants: string[];
+    participants?: any[];
+    suspensions?: Record<string, { suspendedCount: number; yellowAccumulated: number; redPending: number }>;
   }> {
     const match = await this.prisma.match.findUnique({
       where: { id: matchId },
@@ -762,6 +769,57 @@ export class MatchService {
         );
       }
 
+      // Update disciplinary sanctions for Home & Away players (T46 - RF-Sanciones)
+      if (!match.isBye && (tx as any).player) {
+        // Home Player
+        if (match.homeParticipant?.playerId && !match.homeParticipant.isWalkover) {
+          const homePlayer = await tx.player.findUnique({
+            where: { id: match.homeParticipant.playerId },
+          });
+          if (homePlayer) {
+            const currentPendingYellows = homePlayer.pendingYellowCards ?? 0;
+            const remainingYellows = currentPendingYellows % 4;
+            const remainingReds = 0;
+            const matchYellows = match.homeYellowCards ?? 0;
+            const matchReds = match.homeRedCards ?? 0;
+            const nextPendingYellows = remainingYellows + matchYellows;
+            const nextPendingReds = remainingReds + matchReds;
+
+            await tx.player.update({
+              where: { id: match.homeParticipant.playerId },
+              data: {
+                pendingYellowCards: nextPendingYellows,
+                pendingRedCards: nextPendingReds,
+              },
+            });
+          }
+        }
+
+        // Away Player
+        if (match.awayParticipant?.playerId && !match.awayParticipant.isWalkover) {
+          const awayPlayer = await tx.player.findUnique({
+            where: { id: match.awayParticipant.playerId },
+          });
+          if (awayPlayer) {
+            const currentPendingYellows = awayPlayer.pendingYellowCards ?? 0;
+            const remainingYellows = currentPendingYellows % 4;
+            const remainingReds = 0;
+            const matchYellows = match.awayYellowCards ?? 0;
+            const matchReds = match.awayRedCards ?? 0;
+            const nextPendingYellows = remainingYellows + matchYellows;
+            const nextPendingReds = remainingReds + matchReds;
+
+            await tx.player.update({
+              where: { id: match.awayParticipant.playerId },
+              data: {
+                pendingYellowCards: nextPendingYellows,
+                pendingRedCards: nextPendingReds,
+              },
+            });
+          }
+        }
+      }
+
       const tournament = await tx.tournament.findUniqueOrThrow({
         where: { id: match.tournamentId },
         include: {
@@ -812,6 +870,55 @@ export class MatchService {
         }
       }
 
+      // For LEAGUE_PLAYOFFS: If regular league matches are all CLOSED, and no playoff matches exist yet, generate them!
+      if (tournament.format === 'LEAGUE_PLAYOFFS') {
+        const currentMatches = await tx.match.findMany({
+          where: { tournamentId: match.tournamentId },
+        });
+        const playoffSeriesIds = ['F', 'TP', 'SF1', 'SF2', 'QF1', 'QF2'];
+        const regularMatches = currentMatches.filter(
+          (m) => !m.seriesId || !playoffSeriesIds.some((p) => m.seriesId!.startsWith(p))
+        );
+        const hasExistingPlayoffs = currentMatches.some(
+          (m) => m.seriesId && playoffSeriesIds.some((p) => m.seriesId!.startsWith(p))
+        );
+
+        if (regularMatches.length > 0 && regularMatches.every((m) => m.status === 'CLOSED') && !hasExistingPlayoffs) {
+          const liveStandings = calculateTournamentStandings(tournament.participants, currentMatches);
+          const settings = (tournament.settings as any) || {};
+          const qualifyingSpots = settings.qualifyingSpots || (tournament.participants.length <= 5 ? 2 : 4);
+          const topQualified = liveStandings.slice(0, qualifyingSpots).map((s) => s.participantId);
+          const allStandingsIds = liveStandings.map((s) => s.participantId);
+
+          const isTwoLegged = tournament.matchFormat === 'TWO_LEGGED';
+          const maxRound = Math.max(...regularMatches.map((m) => m.round), 1);
+
+          const generatedPlayoffs = buildPlayoffMatchesFromQualified(
+            topQualified,
+            allStandingsIds,
+            maxRound,
+            isTwoLegged
+          );
+
+          for (const pm of generatedPlayoffs) {
+            await tx.match.create({
+              data: {
+                tournamentId: match.tournamentId,
+                round: pm.round,
+                leg: pm.leg,
+                seriesId: pm.seriesId,
+                homeParticipantId: pm.homeParticipantId as any,
+                awayParticipantId: pm.awayParticipantId as any,
+                status: pm.status as any,
+                isBye: pm.isBye,
+                version: 1,
+                closedAt: null,
+              },
+            });
+          }
+        }
+      }
+
       // Re-fetch all matches with full relations after advancement
       const fullMatches = await tx.match.findMany({
         where: { tournamentId: match.tournamentId },
@@ -830,11 +937,46 @@ export class MatchService {
         fullMatches
       );
 
+      const updatedTournament = await tx.tournament.findUniqueOrThrow({
+        where: { id: match.tournamentId },
+        include: {
+          participants: { include: { player: { include: { user: true } } } },
+        },
+      });
+
+      const suspensions: Record<string, { suspendedCount: number; yellowAccumulated: number; redPending: number }> = {};
+      const enrichedParticipants = updatedTournament.participants.map((p) => {
+        const y = p.player?.pendingYellowCards ?? 0;
+        const r = p.player?.pendingRedCards ?? 0;
+        const suspendedPlayersCount = Math.floor(y / 4) + r;
+        const id = p.playerId || p.player?.id;
+        if (id) {
+          suspensions[id] = {
+            suspendedCount: suspendedPlayersCount,
+            yellowAccumulated: y,
+            redPending: r,
+          };
+        }
+        return {
+          ...p,
+          player: p.player
+            ? {
+                ...p.player,
+                pendingYellowCards: y,
+                pendingRedCards: r,
+                suspendedPlayersCount,
+              }
+            : p.player,
+        };
+      });
+
       return {
         updatedMatch,
         standings,
         bracket: fullMatches,
         unblockedParticipants,
+        participants: enrichedParticipants,
+        suspensions,
       };
     });
 
@@ -848,6 +990,8 @@ export class MatchService {
         standings: result.standings,
         bracket: result.bracket,
         unblockedParticipants: result.unblockedParticipants,
+        participants: result.participants,
+        suspensions: result.suspensions,
       };
       io.to(`tournament:${match.tournamentId}`).emit('match:closed', closedPayload);
       io.emit('match:closed', closedPayload);
@@ -867,6 +1011,8 @@ export class MatchService {
       standings: result.standings,
       bracket: result.bracket,
       unblockedParticipants: result.unblockedParticipants,
+      participants: result.participants,
+      suspensions: result.suspensions,
     };
   }
 

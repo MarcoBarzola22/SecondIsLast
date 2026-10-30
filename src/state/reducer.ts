@@ -1551,6 +1551,33 @@ export function appReducer(state: AppData, action: Action): AppData {
         });
       }
 
+      // 5. Update disciplinary suspensions
+      let updatedSuspensions = { ...(state.activeTournament.suspensions || {}) };
+      if ((action as any).suspensions) {
+        updatedSuspensions = { ...updatedSuspensions, ...(action as any).suspensions };
+      } else if (match) {
+        const homePlayer = match.homeParticipant?.player;
+        const awayPlayer = match.awayParticipant?.player;
+        if (homePlayer) {
+          const y = homePlayer.pendingYellowCards ?? 0;
+          const r = homePlayer.pendingRedCards ?? 0;
+          updatedSuspensions[homePlayer.id] = {
+            suspendedCount: Math.floor(y / 4) + r,
+            yellowAccumulated: y,
+            redPending: r,
+          };
+        }
+        if (awayPlayer) {
+          const y = awayPlayer.pendingYellowCards ?? 0;
+          const r = awayPlayer.pendingRedCards ?? 0;
+          updatedSuspensions[awayPlayer.id] = {
+            suspendedCount: Math.floor(y / 4) + r,
+            yellowAccumulated: y,
+            redPending: r,
+          };
+        }
+      }
+
       return {
         ...state,
         activeTournament: {
@@ -1559,6 +1586,7 @@ export function appReducer(state: AppData, action: Action): AppData {
           groupMatches: updatedGroupMatches,
           series: updatedSeries,
           matches: updatedMatches,
+          suspensions: updatedSuspensions,
         },
       };
     }
@@ -1569,17 +1597,35 @@ export function appReducer(state: AppData, action: Action): AppData {
       if (!hydrated) return state;
 
       // Ensure all participants from payload are registered in state.players
-      const newPlayers = [...state.players];
+      let newPlayers = [...state.players];
       if (Array.isArray(action.payload.participants)) {
         for (const part of action.payload.participants) {
           const pId = part.playerId || part.player?.id || part.id;
+          const y = part.player?.pendingYellowCards ?? 0;
+          const r = part.player?.pendingRedCards ?? 0;
+          const suspendedPlayersCount = Math.floor(y / 4) + r;
+
           if (pId && !newPlayers.some((p) => p.id === pId)) {
             newPlayers.push({
               id: pId,
               firstName: part.player?.firstName || part.name?.split(' ')[0] || 'Jugador',
               lastName: part.player?.lastName || part.name?.split(' ').slice(1).join(' ') || '',
+              pendingYellowCards: y,
+              pendingRedCards: r,
+              suspendedPlayersCount,
               createdAt: new Date().toISOString(),
             });
+          } else if (pId && part.player) {
+            newPlayers = newPlayers.map((existing) =>
+              existing.id === pId
+                ? {
+                    ...existing,
+                    pendingYellowCards: part.player.pendingYellowCards ?? existing.pendingYellowCards,
+                    pendingRedCards: part.player.pendingRedCards ?? existing.pendingRedCards,
+                    suspendedPlayersCount,
+                  }
+                : existing
+            );
           }
         }
       }
@@ -1792,6 +1838,41 @@ export function buildActiveTournamentFromPayload(payload: any): ActiveTournament
     phase = 'bracket';
   }
 
+  const suspensions: Record<string, { suspendedCount: number; yellowAccumulated: number; redPending: number }> = {
+    ...(payload.suspensions || {}),
+  };
+  for (const p of participants) {
+    const id = p.playerId || p.player?.id || p.id;
+    if (id) {
+      const yellowAccumulated = p.player?.pendingYellowCards ?? 0;
+      const redPending = p.player?.pendingRedCards ?? 0;
+      const suspendedCount = Math.floor(yellowAccumulated / 4) + redPending;
+      if (!suspensions[id] || p.player?.pendingYellowCards !== undefined) {
+        suspensions[id] = {
+          suspendedCount,
+          yellowAccumulated,
+          redPending,
+        };
+      }
+    }
+  }
+  for (const m of rawMatches) {
+    for (const part of [m.homeParticipant, m.awayParticipant]) {
+      if (!part) continue;
+      const id = part.playerId || part.player?.id || part.id;
+      if (id && (!suspensions[id] || part.player?.pendingYellowCards !== undefined)) {
+        const yellowAccumulated = part.player?.pendingYellowCards ?? 0;
+        const redPending = part.player?.pendingRedCards ?? 0;
+        const suspendedCount = Math.floor(yellowAccumulated / 4) + redPending;
+        suspensions[id] = {
+          suspendedCount,
+          yellowAccumulated,
+          redPending,
+        };
+      }
+    }
+  }
+
   return {
     id: payload.id,
     createdAt: payload.createdAt || new Date().toISOString(),
@@ -1808,5 +1889,6 @@ export function buildActiveTournamentFromPayload(payload: any): ActiveTournament
     leagueMatches: leagueMatches.length > 0 ? leagueMatches : undefined,
     groupMatches: groupMatches.length > 0 ? groupMatches : undefined,
     matches: rawMatches,
+    suspensions,
   };
 }

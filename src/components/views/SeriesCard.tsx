@@ -14,6 +14,7 @@ import {
   getSeriesResult,
   isSeriesReady,
 } from '../../domain/series';
+import { calculateSuspensionInfo } from '../../domain/fairPlay';
 import type { CardCounts, PlayerId, Series, Side } from '../../domain/types';
 import { useAppDispatch, useAppState } from '../../state/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -425,47 +426,78 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
     team: string,
     isBye: boolean,
     isWinner: boolean,
-    isWalkover: boolean
-  ) => (
-    <div
-      className={`flex items-center justify-between gap-2 px-4 py-2.5 transition ${
-        isWalkover
-          ? 'bg-destructive/10'
-          : isWinner
-            ? 'bg-primary/15'
-            : 'bg-background/40'
-      }`}
-    >
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <p
-            className={`truncate font-semibold ${
-              isWalkover
-                ? 'text-destructive line-through'
-                : isWinner
-                  ? 'text-primary'
-                  : 'text-foreground'
-            }`}
-          >
-            {name}
-          </p>
-          {isWalkover && (
-            <span className="rounded border border-destructive/40 bg-destructive/20 px-1.5 py-0.5 font-display text-[10px] font-bold uppercase tracking-wider text-destructive flex items-center gap-0.5">
-              <AlertTriangle className="h-2.5 w-2.5" /> W.O.
-            </span>
-          )}
-          {isBye && (
-            <span className="rounded border border-accent/40 bg-accent/20 px-1.5 py-0.5 font-display text-[10px] font-bold uppercase tracking-wider text-accent">
-              Pase directo
-            </span>
-          )}
-        </div>
-        <p className="truncate text-xs text-muted-foreground">{team}</p>
-      </div>
+    isWalkover: boolean,
+    playerId?: PlayerId | null
+  ) => {
+    const isConfirmed = series.confirmed;
+    const susp = playerId ? activeTournament.suspensions?.[playerId] : null;
+    const playerObj = playerId ? playersMap.get(playerId) : null;
+    const yCards = susp?.yellowAccumulated ?? (playerObj?.pendingYellowCards ?? 0);
+    const rCards = susp?.redPending ?? (playerObj?.pendingRedCards ?? 0);
+    const suspInfo = calculateSuspensionInfo(yCards, rCards);
 
-      {isWinner && <Trophy className="h-4 w-4 shrink-0 text-primary glow-green" />}
-    </div>
-  );
+    return (
+      <div
+        className={`flex flex-col gap-1 px-4 py-2.5 transition ${
+          isWalkover
+            ? 'bg-destructive/10'
+            : isWinner
+              ? 'bg-primary/15'
+              : 'bg-background/40'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <p
+                className={`truncate font-semibold ${
+                  isWalkover
+                    ? 'text-destructive line-through'
+                    : isWinner
+                      ? 'text-primary'
+                      : 'text-foreground'
+                }`}
+              >
+                {name}
+              </p>
+              {!isConfirmed && !isWalkover && (suspInfo.yellowCycle > 0 || suspInfo.yellowAccumulated >= 4) && (
+                <span
+                  className="rounded border border-amber-500/40 bg-amber-500/20 px-1.5 py-0.2 font-display text-[10px] font-bold text-amber-300"
+                  title="Amarillas acumuladas hacia la próxima sanción"
+                >
+                  🟨 {suspInfo.yellowCycle > 0 ? `${suspInfo.yellowCycle}/4` : '4/4'}
+                </span>
+              )}
+              {isWalkover && (
+                <span className="rounded border border-destructive/40 bg-destructive/20 px-1.5 py-0.5 font-display text-[10px] font-bold uppercase tracking-wider text-destructive flex items-center gap-0.5">
+                  <AlertTriangle className="h-2.5 w-2.5" /> W.O.
+                </span>
+              )}
+              {isBye && (
+                <span className="rounded border border-accent/40 bg-accent/20 px-1.5 py-0.5 font-display text-[10px] font-bold uppercase tracking-wider text-accent">
+                  Pase directo
+                </span>
+              )}
+            </div>
+            <p className="truncate text-xs text-muted-foreground">{team}</p>
+          </div>
+
+          {isWinner && <Trophy className="h-4 w-4 shrink-0 text-primary glow-green" />}
+        </div>
+
+        {/* Banner de Sanción Disciplinaria (RF-Sanciones) */}
+        {!isConfirmed && !isWalkover && suspInfo.isSuspended && (
+          <div className="mt-1 flex items-center gap-1.5 rounded border border-amber-400/60 bg-destructive/20 px-2 py-1 text-xs font-bold text-amber-300 shadow-sm animate-pulse">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+            <span>
+              🚨 SANCIONADO: {suspInfo.suspendedCount === 1 ? 'Su MEJOR JUGADOR' : `Sus ${suspInfo.suspendedCount} MEJORES JUGADORES`}{' '}
+              no {suspInfo.suspendedCount === 1 ? 'puede' : 'pueden'} jugar este partido ({suspInfo.motivo})
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div
@@ -496,7 +528,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
       </div>
 
       {/* Participante A */}
-      {renderSideHeader(nameA, teamA, isByeA, isWinnerA, isWalkoverA)}
+      {renderSideHeader(nameA, teamA, isByeA, isWinnerA, isWalkoverA, series.playerA)}
 
       {/* Bloque central de resultados */}
       <div className="border-y border-border bg-background/60 p-3">
@@ -875,7 +907,7 @@ export function SeriesCard({ series, label }: SeriesCardProps) {
       </div>
 
       {/* Participante B */}
-      {renderSideHeader(nameB, teamB, isByeB, isWinnerB, isWalkoverB)}
+      {renderSideHeader(nameB, teamB, isByeB, isWinnerB, isWalkoverB, series.playerB)}
 
       {/* Botón de acción: Handshake / Confirmar / Corregir */}
       {ready && (

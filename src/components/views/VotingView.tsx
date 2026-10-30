@@ -19,7 +19,7 @@ import { PrimaryButton } from '../ui/Buttons';
 import { Panel } from '../ui/Panel';
 
 export interface VoteEndedPayload {
-  phase: 'FORMAT' | 'THEME';
+  phase: 'FORMAT' | 'PLAYOFF_SPOTS' | 'THEME' | 'ASSIGNMENT_METHOD' | 'BRACKET_METHOD' | string;
   winner: string;
   matchFormat?: 'SINGLE_MATCH' | 'TWO_LEGGED' | string;
   wasDraw: boolean;
@@ -81,6 +81,45 @@ const FORMAT_METADATA: Record<string, FormatMeta> = {
   },
 };
 
+const PLAYOFF_SPOTS_METADATA: Record<string, FormatMeta> = {
+  '2': {
+    title: 'Top 2 Clasificados',
+    badge: 'Final Directa',
+    description: 'El 1° y 2° de la tabla disputan la Gran Final por el título. 3° y 4° juegan por el 3er puesto.',
+    icon: Trophy,
+  },
+  '3': {
+    title: 'Top 3 Clasificados',
+    badge: 'Semifinal Previa',
+    description: '2° vs 3° juegan la semifinal previa; el ganador va a la Gran Final contra el 1° que espera.',
+    icon: Shuffle,
+  },
+  '4': {
+    title: 'Top 4 Clasificados',
+    badge: 'Semifinales Tradicionales',
+    description: '1° vs 4° y 2° vs 3° en semifinales; los ganadores disputan la Gran Final.',
+    icon: ListOrdered,
+  },
+  '5': {
+    title: 'Top 5 Clasificados',
+    badge: 'Repechaje Previo',
+    description: 'El 4° vs 5° juegan el cruce previo (QF1); el ganador va contra el 1° en Semis; 2° vs 3° en Semi 2.',
+    icon: Layers,
+  },
+  '6': {
+    title: 'Top 6 Clasificados',
+    badge: 'Cuartos Previos',
+    description: '4° vs 5° (ganador vs 1°) y 3° vs 6° (ganador vs 2°); los mejores esperan en Semifinales.',
+    icon: Dices,
+  },
+  random: {
+    title: 'Sortear al Azar',
+    badge: '🎲 Azar Uniforme',
+    description: 'Dejá que la suerte decida cuántos participantes clasifican al reducido.',
+    icon: Dices,
+  },
+};
+
 export function VotingView({
   tournamentId,
   initialExpiresAt = null,
@@ -92,7 +131,7 @@ export function VotingView({
   const { socket, isConnected } = useSocket();
   const { isOffline } = useNetworkStatus();
 
-  const [phase, setPhase] = useState<'FORMAT' | 'THEME'>('FORMAT');
+  const [phase, setPhase] = useState<'FORMAT' | 'PLAYOFF_SPOTS' | 'THEME'>('FORMAT');
   const [options, setOptions] = useState<string[]>(initialOptions);
   const [expiresAt, setExpiresAt] = useState<string | null>(initialExpiresAt);
   const [votesCast, setVotesCast] = useState<number>(0);
@@ -171,7 +210,7 @@ export function VotingView({
     if (!socket) return;
 
     const handleVoteStarted = (payload: {
-      phase: 'FORMAT' | 'THEME';
+      phase: 'FORMAT' | 'PLAYOFF_SPOTS' | 'THEME';
       options: string[];
       expiresAt: string;
       totalVoters: number;
@@ -188,7 +227,7 @@ export function VotingView({
     };
 
     const handleVoteUpdated = (payload: {
-      phase: 'FORMAT' | 'THEME';
+      phase: 'FORMAT' | 'PLAYOFF_SPOTS' | 'THEME';
       votesCast: number;
       totalVoters: number;
     }) => {
@@ -350,7 +389,13 @@ export function VotingView({
     <div className="mx-auto max-w-4xl px-4 py-4 space-y-6">
       {/* HUD Header & Countdown Panel (RF-99, RF-100) */}
       <Panel
-        title={phase === 'FORMAT' ? 'Votación de Formato (Paso 1 de 3)' : 'Votación de Temática (Paso 2 de 3)'}
+        title={
+          phase === 'FORMAT'
+            ? 'Votación de Formato (Paso 1 de 3)'
+            : phase === 'PLAYOFF_SPOTS'
+            ? 'Clasificados al Reducido (Liga + Reducido)'
+            : 'Votación de Temática (Paso 2 de 3)'
+        }
         subtitle={isConnected ? 'Sincronizado' : 'Sin conexión'}
       >
         <div className="space-y-4">
@@ -361,7 +406,11 @@ export function VotingView({
                 Votación en Vivo (60 Segundos)
               </span>
               <h2 className="font-display text-2xl font-black text-foreground">
-                {phase === 'FORMAT' ? 'Elegí el Formato del Torneo' : 'Elegí la Temática de Equipos'}
+                {phase === 'FORMAT'
+                  ? 'Elegí el Formato del Torneo'
+                  : phase === 'PLAYOFF_SPOTS'
+                  ? '¿Cuántos jugadores clasifican al Reducido Final?'
+                  : 'Elegí la Temática de Equipos'}
               </h2>
             </div>
 
@@ -424,7 +473,13 @@ export function VotingView({
       {/* Result Card when Voting Concludes (RF-100, RF-101) */}
       {voteResult && (
         <Panel
-          title={voteResult.phase === 'FORMAT' ? 'Resultado: Formato Electo' : '¡Temática Electa para la Juntada!'}
+          title={
+            voteResult.phase === 'FORMAT'
+              ? 'Resultado: Formato Electo'
+              : voteResult.phase === 'PLAYOFF_SPOTS'
+              ? '¡Clasificados al Reducido Electos!'
+              : '¡Temática Electa para la Juntada!'
+          }
           subtitle="Definición Oficial"
         >
           <div className="space-y-5 text-center py-2">
@@ -438,11 +493,17 @@ export function VotingView({
                     🎲 {voteResult.wasDraw ? '¡Desempate en Vivo por Ruleta!' : '¡Sorteo Automático al Azar!'}
                   </span>
                   <h3 className="font-display text-2xl sm:text-3xl font-black text-foreground uppercase tracking-wider">
-                    {FORMAT_METADATA[rouletteOption.toLowerCase()]?.title || rouletteOption}
+                    {voteResult.phase === 'PLAYOFF_SPOTS'
+                      ? (PLAYOFF_SPOTS_METADATA[rouletteOption]?.title || `Top ${rouletteOption} Clasificados`)
+                      : (FORMAT_METADATA[rouletteOption.toLowerCase()]?.title || rouletteOption)}
                   </h3>
                 </div>
                 <p className="text-xs text-muted-foreground font-mono">
-                  {voteResult.phase === 'FORMAT' ? 'Sorteando entre formatos disponibles...' : 'Sorteando entre temáticas disponibles...'}
+                  {voteResult.phase === 'FORMAT'
+                    ? 'Sorteando entre formatos disponibles...'
+                    : voteResult.phase === 'PLAYOFF_SPOTS'
+                    ? 'Sorteando cantidad de clasificados...'
+                    : 'Sorteando entre temáticas disponibles...'}
                 </p>
               </div>
             ) : (
@@ -453,10 +514,18 @@ export function VotingView({
 
                 <div className="space-y-1.5">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground font-mono">
-                    {voteResult.phase === 'FORMAT' ? 'Formato Electo para la Juntada' : '¡Temática Electa para la Juntada!'}
+                    {voteResult.phase === 'FORMAT'
+                      ? 'Formato Electo para la Juntada'
+                      : voteResult.phase === 'PLAYOFF_SPOTS'
+                      ? 'Clasificados al Reducido'
+                      : '¡Temática Electa para la Juntada!'}
                   </span>
                   <h3 className="font-display text-2xl sm:text-3xl font-black text-foreground text-glow uppercase">
-                    {voteResult.phase === 'FORMAT' ? formatWinnerName : (FORMAT_METADATA[voteResult.winner.toLowerCase()]?.title || voteResult.winner)}
+                    {voteResult.phase === 'FORMAT'
+                      ? formatWinnerName
+                      : voteResult.phase === 'PLAYOFF_SPOTS'
+                      ? (PLAYOFF_SPOTS_METADATA[voteResult.winner]?.title || `Top ${voteResult.winner} Clasificados`)
+                      : (FORMAT_METADATA[voteResult.winner.toLowerCase()]?.title || voteResult.winner)}
                   </h3>
                   {voteResult.phase === 'FORMAT' && voteResult.matchFormat && (
                     <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-secondary/80 border border-border text-xs font-semibold text-foreground mt-2">
@@ -551,7 +620,13 @@ export function VotingView({
       {!voteResult && (
         <Panel
           title="Opciones Disponibles"
-          subtitle={phase === 'FORMAT' ? `${options.length} formatos válidos` : `${options.length} temáticas disponibles`}
+          subtitle={
+            phase === 'FORMAT'
+              ? `${options.length} formatos válidos`
+              : phase === 'PLAYOFF_SPOTS'
+              ? `${options.length} opciones de clasificación`
+              : `${options.length} temáticas disponibles`
+          }
         >
           {isOffline && (
             <div className="rounded border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-300 text-center mb-3">
@@ -561,12 +636,20 @@ export function VotingView({
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
             {(options.includes('random') ? options : [...options, 'random']).map((optionKey) => {
-              const meta = FORMAT_METADATA[optionKey] || {
-                title: optionKey,
-                badge: 'Formato',
-                description: 'Opción de torneo válida.',
-                icon: Trophy,
-              };
+              const meta =
+                phase === 'PLAYOFF_SPOTS'
+                  ? PLAYOFF_SPOTS_METADATA[optionKey] || {
+                      title: `Top ${optionKey} Clasificados`,
+                      badge: 'Reducido',
+                      description: 'Clasifican al cuadro final.',
+                      icon: Trophy,
+                    }
+                  : FORMAT_METADATA[optionKey] || {
+                      title: optionKey,
+                      badge: 'Formato',
+                      description: 'Opción de torneo válida.',
+                      icon: Trophy,
+                    };
 
               const isSelected = selectedChoice?.toLowerCase() === optionKey.toLowerCase();
               const Icon = meta.icon;

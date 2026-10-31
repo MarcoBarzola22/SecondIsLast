@@ -340,8 +340,8 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
   // Strict check: Only ADMIN can view this panel (RF-91)
   if (!isAdmin) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-        <div className="panel-metal max-w-md w-full rounded-md p-6 border border-border shadow-2xl text-center">
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-hidden">
+        <div className="relative max-w-md w-full bg-card rounded-xl p-6 border border-border shadow-2xl text-center">
           <AlertCircle className="h-10 w-10 text-destructive mx-auto mb-3" />
           <h2 className="font-display text-lg font-bold text-foreground mb-2">Acceso Restringido</h2>
           <p className="text-sm text-muted-foreground mb-4">
@@ -464,18 +464,18 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-5 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="panel-metal w-full max-w-2xl max-h-[92vh] flex flex-col rounded-md border border-border shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-hidden">
+      <div className="relative w-full max-w-4xl flex flex-col bg-card rounded-xl shadow-2xl border border-border max-h-full sm:max-h-[90vh]">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-border/70 px-5 py-3.5 bg-secondary/30">
+        <div className="shrink-0 flex items-center justify-between border-b border-border/70 px-6 py-4 bg-secondary/30">
           <div className="flex items-center gap-2.5">
-            <ShieldCheck className="h-6 w-6 text-gold" />
+            <ShieldCheck className="h-6 w-6 text-gold shrink-0" />
             <div>
               <h2 className="font-display text-lg font-black tracking-wider text-foreground">
                 PANEL DE ADMINISTRACIÓN
               </h2>
               <p className="text-xs text-muted-foreground">
-                Gestión de Whitelist y Migración de Datos Locales a PostgreSQL.
+                Gestión de Whitelist, Migración de Datos y Temáticas con Equipos.
               </p>
             </div>
           </div>
@@ -490,11 +490,11 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
         </div>
 
         {/* Tabs Switcher */}
-        <div className="flex border-b border-border/70 bg-secondary/20 px-5 pt-2 gap-2">
+        <div className="shrink-0 flex border-b border-border/70 bg-secondary/20 px-6 pt-2 gap-2 overflow-x-auto">
           <button
             type="button"
             onClick={() => setActiveTab('whitelist')}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 transition ${
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 transition shrink-0 ${
               activeTab === 'whitelist'
                 ? 'border-gold text-gold'
                 : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -506,7 +506,7 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
           <button
             type="button"
             onClick={() => setActiveTab('migration')}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 transition ${
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 transition shrink-0 ${
               activeTab === 'migration'
                 ? 'border-accent text-accent'
                 : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -518,7 +518,7 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
           <button
             type="button"
             onClick={() => setActiveTab('themes')}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 transition ${
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 transition shrink-0 ${
               activeTab === 'themes'
                 ? 'border-primary text-primary'
                 : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -530,7 +530,7 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 min-h-0 space-y-5">
           {activeTab === 'whitelist' && (
             <>
               {error && (
@@ -1013,7 +1013,7 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end border-t border-border/70 px-5 py-3 bg-secondary/30">
+        <div className="shrink-0 flex items-center justify-end border-t border-border/70 px-5 py-3 bg-secondary/30">
           <SecondaryButton onClick={onClose} className="py-2 text-xs">
             Cerrar
           </SecondaryButton>

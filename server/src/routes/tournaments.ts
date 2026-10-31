@@ -201,6 +201,11 @@ router.post('/abandon', async (req: Request, res: Response) => {
         tournamentId: tournament.id,
         status: 'ABANDONED',
       });
+      io.emit('lobby:updated', {
+        participants: [],
+        count: 0,
+        canStart: false,
+      });
     }
 
     res.status(200).json({ ok: true, tournament });

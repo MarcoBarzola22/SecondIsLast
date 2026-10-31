@@ -204,18 +204,25 @@ export default function App() {
   useEffect(() => {
     if (!socket) return;
 
-    const handleTournamentAbandoned = () => {
+    const handleTournamentAbandoned = (_payload?: any) => {
       saveOfflineTournament(null);
       dispatch({ type: 'TOURNAMENT_ABANDONED' });
       setCloudTournament(null);
       setActiveTournamentId(undefined);
       setVotingSessionData(null);
-      setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'lobby'));
+      setLiveHandshakeMatch(null);
+      setFinishedTournamentModal(null);
+      setView('lobby');
+
+      // Immediate clean sync upon abandon across all clients
+      if (isOnline) {
+        rehydrateActiveTournament();
+      }
     };
 
     const handleTournamentStatus = async (payload: any) => {
       if (payload?.status === 'ABANDONED') {
-        handleTournamentAbandoned();
+        handleTournamentAbandoned(payload);
         return;
       }
       if (payload?.status === 'VOTING_FORMAT') {
@@ -522,7 +529,10 @@ export default function App() {
 
       <main className="mx-auto">
         {view === 'lobby' && (
-          <LobbyView onProceedToVoting={() => setView('votacion')} />
+          <LobbyView
+            key={cloudTournament?.id || activeTournamentId || 'clean-lobby'}
+            onProceedToVoting={() => setView('votacion')}
+          />
         )}
 
         {view === 'votacion' && (

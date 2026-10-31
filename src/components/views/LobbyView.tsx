@@ -155,8 +155,18 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
       fetchActiveTournament();
     };
 
+    const handleTournamentAbandoned = () => {
+      setTournament(null);
+      setParticipants([]);
+      setCount(0);
+      setCanStart(false);
+      setLobbyExpiresAt(null);
+      fetchActiveTournament();
+    };
+
     socket.on('lobby:updated', handleLobbyUpdated);
     socket.on('lobby:created', handleLobbyCreated);
+    socket.on('tournament:abandoned', handleTournamentAbandoned);
 
     const handleVoteStarted = () => {
       onProceedToVoting?.();
@@ -174,6 +184,7 @@ export function LobbyView({ onProceedToVoting }: LobbyViewProps) {
     return () => {
       socket.off('lobby:updated', handleLobbyUpdated);
       socket.off('lobby:created', handleLobbyCreated);
+      socket.off('tournament:abandoned', handleTournamentAbandoned);
       socket.off('vote:started', handleVoteStarted);
       socket.off('tournament:status', handleTournamentStatus);
     };

@@ -276,6 +276,23 @@
   - Cubre: RF-57, RF-58, RF-59, RF-60, RF-88, RF-91, RF-94, RF-118, RF-119.  
   - Hecho cuando: `npx prisma db push` actualiza PostgreSQL, `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites de tests pasan 100% en verde.
 
+- [x] **T44.1 · Hotfix UI: Layout de 3 Secciones en Header, Modal Admin con Temáticas/Equipos y Recarga Limpia de Lobby**  
+  1. **Reestructuración y Compactación del Header (`Header.tsx`):**  
+     - Separación del Header en 3 zonas nítidas: Izquierda (Logo y Título), Centro (Navegación principal `Torneo`, `Tabla y Perfiles`, `Reglamento`) y Derecha (Controles: Dev Login, Perfil/Auth, Admin y botón de Abandonar).  
+     - Uso de `shrink-0`, contenedor estricto sin envoltura de fila (`flex items-center gap-1.5 sm:gap-2 shrink-0`) y textos responsive (`hidden md:inline`).  
+     - Badge compacto en pestaña Torneo (`🔴 Lobby` o `🔴 Activo`) y reducción de paddings/márgenes excesivos para evitar deformación o ensanchamiento.  
+  2. **Pestaña "Temáticas y Equipos" y Contenedor Robusto de Modal Admin (`WhitelistModal.tsx`):**  
+     - Overlay seguro `fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-hidden`.  
+     - Modal `relative w-full max-w-4xl flex flex-col bg-card rounded-xl shadow-2xl border border-border max-h-full sm:max-h-[90vh]`.  
+     - Cabecera, pestañas (`Whitelist` | `Migración a PostgreSQL` | `Temáticas y Equipos`) y footer con `shrink-0`.  
+     - Contenedor del cuerpo con `flex-1 overflow-y-auto p-4 sm:p-6 min-h-0 space-y-5`, eliminando desbordamientos de flexbox.  
+     - Pestaña `themes` completamente funcional conectada a `GET /api/tournaments/themes`, con formulario de alta (`POST /api/tournaments/teams`) y baja (`DELETE /api/tournaments/themes/:name`).  
+  3. **Recarga y Limpieza Visual Inmediata al Abandonar Torneo (`LobbyView.tsx`, `App.tsx`):**  
+     - En `LobbyView.tsx`, listener directo a `tournament:abandoned` para resetear al instante `tournament`, `participants`, `count` y disparar `fetchActiveTournament()`.  
+     - En `App.tsx`, forzado de remontado limpio de `<LobbyView key={cloudTournament?.id || activeTournamentId || 'clean-lobby'} />` y rehidratación inmediata eliminando cualquier vestigio o estado sucio en los clientes.  
+  - Cubre: RF-44, RF-57, RF-58, RF-59, RF-60, RF-91, RF-94, RF-95, RF-118, RF-119, RNF-3.  
+  - Hecho cuando: `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites de tests de frontend (391 tests) y backend (153 tests) pasan 100% en verde.
+
 - [x] **T45 · Pulido Final Bloque 2: Votaciones Especiales por Formato y Eliminación de Armado Manual Libre**  
   1. **Eliminar `ManualMatchupsPanel` de Todas las Vistas (`BracketView.tsx` y `DoubleEliminationView.tsx`):**  
      - Eliminación completa de la importación y renderizado de `ManualMatchupsPanel`. Los cruces no pueden modificarse fuera del flujo deportivo/sorteo oficial.  

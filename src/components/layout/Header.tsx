@@ -57,7 +57,7 @@ export function Header({
   const hasAlert =
     (currentView === 'tabla' || currentView === 'reglamento') &&
     Boolean(hasActiveTournamentAlert ?? (cloudTournament || activeTournament));
-  const alertBadge = cloudTournament?.status === 'LOBBY' ? '🔴 ¡Lobby Abierto!' : '🔴 ¡Torneo Activo!';
+  const alertBadge = cloudTournament?.status === 'LOBBY' ? '🔴 Lobby' : '🔴 Activo';
 
   const handleAbandon = async () => {
     const confirmed = window.confirm(
@@ -87,7 +87,7 @@ export function Header({
       : null;
 
   return (
-    <header className="sticky top-0 z-50 panel-metal mb-6 flex flex-col rounded-md px-5 py-3.5 backdrop-blur-sm shadow-xl gap-3">
+    <header className="sticky top-0 z-50 panel-metal mb-4 flex flex-col rounded-md px-3 sm:px-4 py-2 sm:py-2.5 backdrop-blur-sm shadow-xl gap-2">
       {/* Banner de Modo Offline (RF-120, RNF-3) */}
       {isOffline && (
         <div
@@ -111,85 +111,88 @@ export function Header({
         </div>
       )}
 
-      <div className="flex w-full flex-col items-center justify-between gap-4 md:flex-row">
-        <div className="flex items-center gap-3">
-          <Gamepad2 className="h-9 w-9 text-primary text-glow" />
+      <div className="flex w-full flex-col md:flex-row items-center justify-between gap-2.5">
+        {/* 1. Izquierda: Logo y título */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <Gamepad2 className="h-7 w-7 md:h-8 md:w-8 text-primary text-glow shrink-0" />
           <div>
-            <h1 className="font-display text-2xl font-black tracking-widest text-foreground md:text-3xl">
+            <h1 className="font-display text-lg sm:text-xl font-black tracking-widest text-foreground">
               SECOND <span className="text-accent text-glow">IS</span> LAST
             </h1>
-            <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+            <p className="text-[9px] sm:text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
               PES 6 · Tournament Mode
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          {/* Main 3 Clean Tabs Navigation */}
-          <nav className="flex flex-wrap items-center justify-center gap-1.5">
-            {/* Tab 1: Torneo */}
-            <button
-              type="button"
-              onClick={() => onNavigate('lobby')}
-              className={`flex items-center gap-1.5 rounded-sm border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${
-                isTournamentView
-                  ? 'border-primary bg-primary text-primary-foreground glow-green'
-                  : hasAlert
-                  ? 'animate-pulse border-primary bg-primary/20 text-primary shadow-[0_0_15px_rgba(34,197,94,0.4)] hover:bg-primary/30'
-                  : 'border-border bg-secondary text-muted-foreground hover:border-accent hover:text-accent'
-              }`}
-              title="Flujo activo del torneo (Lobby, Votaciones, Equipos, Draft y Fixture)"
-            >
-              <Trophy className="h-3.5 w-3.5" />
-              <span>Torneo</span>
-              {hasAlert && (
-                <span className="ml-1 rounded-full bg-primary/30 border border-primary/50 px-1.5 py-0.5 text-[10px] font-bold text-primary animate-pulse">
-                  {alertBadge}
-                </span>
-              )}
-            </button>
+        {/* 2. Centro: Navegación principal */}
+        <nav className="flex items-center justify-center gap-1 sm:gap-1.5 shrink-0">
+          {/* Tab 1: Torneo */}
+          <button
+            type="button"
+            onClick={() => onNavigate('lobby')}
+            className={`flex items-center gap-1 sm:gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-semibold uppercase tracking-wider transition shrink-0 ${
+              isTournamentView
+                ? 'border-primary bg-primary text-primary-foreground glow-green'
+                : hasAlert
+                ? 'animate-pulse border-primary bg-primary/20 text-primary shadow-[0_0_15px_rgba(34,197,94,0.4)] hover:bg-primary/30'
+                : 'border-border bg-secondary text-muted-foreground hover:border-accent hover:text-accent'
+            }`}
+            title="Flujo activo del torneo (Lobby, Votaciones, Equipos, Draft y Fixture)"
+          >
+            <Trophy className="h-3.5 w-3.5 shrink-0" />
+            <span>Torneo</span>
+            {hasAlert && (
+              <span className="ml-1 rounded-full bg-primary/30 border border-primary/50 px-1.5 py-0.2 text-[9px] font-bold text-primary animate-pulse whitespace-nowrap">
+                {alertBadge}
+              </span>
+            )}
+          </button>
 
-            {/* Tab 2: Tabla y Perfiles */}
-            <button
-              type="button"
-              onClick={() => onNavigate('tabla')}
-              className={`flex items-center gap-1.5 rounded-sm border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${
-                currentView === 'tabla'
-                  ? 'border-primary bg-primary text-primary-foreground glow-green'
-                  : 'border-border bg-secondary text-muted-foreground hover:border-accent hover:text-accent'
-              }`}
-              title="Tabla de posiciones históricas, récords y perfiles de jugadores"
-            >
-              <ListOrdered className="h-3.5 w-3.5" />
-              <span>Tabla y Perfiles</span>
-            </button>
+          {/* Tab 2: Tabla y Perfiles */}
+          <button
+            type="button"
+            onClick={() => onNavigate('tabla')}
+            className={`flex items-center gap-1 sm:gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-semibold uppercase tracking-wider transition shrink-0 ${
+              currentView === 'tabla'
+                ? 'border-primary bg-primary text-primary-foreground glow-green'
+                : 'border-border bg-secondary text-muted-foreground hover:border-accent hover:text-accent'
+            }`}
+            title="Tabla de posiciones históricas, récords y perfiles de jugadores"
+          >
+            <ListOrdered className="h-3.5 w-3.5 shrink-0" />
+            <span>Tabla y Perfiles</span>
+          </button>
 
-            {/* Tab 3: Reglamento */}
-            <button
-              type="button"
-              onClick={() => onNavigate('reglamento')}
-              className={`flex items-center gap-1.5 rounded-sm border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${
-                currentView === 'reglamento'
-                  ? 'border-primary bg-primary text-primary-foreground glow-green'
-                  : 'border-border bg-secondary text-muted-foreground hover:border-accent hover:text-accent'
-              }`}
-              title="Reglamento Oficial de la Casa (Código de Honor)"
-            >
-              <BookOpen className="h-3.5 w-3.5 text-accent" />
-              <span>Reglamento</span>
-            </button>
-          </nav>
+          {/* Tab 3: Reglamento */}
+          <button
+            type="button"
+            onClick={() => onNavigate('reglamento')}
+            className={`flex items-center gap-1 sm:gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-semibold uppercase tracking-wider transition shrink-0 ${
+              currentView === 'reglamento'
+                ? 'border-primary bg-primary text-primary-foreground glow-green'
+                : 'border-border bg-secondary text-muted-foreground hover:border-accent hover:text-accent'
+            }`}
+            title="Reglamento Oficial de la Casa (Código de Honor)"
+          >
+            <BookOpen className="h-3.5 w-3.5 text-accent shrink-0" />
+            <span>Reglamento</span>
+          </button>
+        </nav>
 
+        {/* 3. Derecha: Controles de usuario */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Dev-Login Quick Switcher (DEV Only DX) */}
           {import.meta.env.DEV && (
-            <div className="relative">
+            <div className="relative shrink-0">
               <button
                 type="button"
                 onClick={() => setIsDevMenuOpen(!isDevMenuOpen)}
-                className="flex items-center gap-1.5 rounded-sm border border-purple-500/50 bg-purple-500/10 hover:bg-purple-500/25 text-purple-300 px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wider transition"
+                className="flex items-center gap-1 rounded-sm border border-purple-500/50 bg-purple-500/10 hover:bg-purple-500/25 text-purple-300 px-2 py-1 text-xs font-semibold uppercase tracking-wider transition shrink-0"
                 title="Selector rápido de inicio de sesión para desarrollo"
               >
-                <span>🛠️ Dev Login</span>
+                <span>🛠️</span>
+                <span className="hidden md:inline">Dev Login</span>
               </button>
 
               {isDevMenuOpen && (
@@ -273,18 +276,18 @@ export function Header({
 
           {/* User Auth Profile & Role (RF-90) */}
           {user ? (
-            <div className="flex items-center gap-2 bg-secondary/50 border border-border/80 rounded-sm px-2.5 py-1 text-xs">
-              <UserIcon className="h-4 w-4 text-primary shrink-0" />
-              <div className="flex flex-col text-left leading-tight">
-                <span className="font-bold text-foreground truncate max-w-[130px]" title={displayName}>
+            <div className="flex items-center gap-1.5 bg-secondary/50 border border-border/80 rounded-sm px-2 py-1 text-xs shrink-0">
+              <UserIcon className="h-3.5 w-3.5 text-primary shrink-0" />
+              <div className="flex flex-col text-left leading-tight max-w-[85px] sm:max-w-[120px]">
+                <span className="font-bold text-foreground truncate text-[11px] sm:text-xs" title={displayName}>
                   {displayName}
                 </span>
-                <span className="text-[10px] text-muted-foreground truncate max-w-[130px]" title={user.email}>
+                <span className="text-[9px] text-muted-foreground truncate hidden md:inline" title={user.email}>
                   {user.email}
                 </span>
               </div>
               <span
-                className={`ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                className={`ml-0.5 px-1 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider shrink-0 hidden md:inline ${
                   user.role === 'ADMIN'
                     ? 'bg-gold/20 text-gold border border-gold/40'
                     : 'bg-primary/10 text-primary border border-primary/30'
@@ -295,7 +298,7 @@ export function Header({
               <button
                 type="button"
                 onClick={logout}
-                className="ml-1 p-1 text-muted-foreground hover:text-destructive transition rounded hover:bg-secondary"
+                className="ml-0.5 p-0.5 text-muted-foreground hover:text-destructive transition rounded hover:bg-secondary shrink-0"
                 title="Cerrar sesión"
               >
                 <LogOut className="h-3.5 w-3.5" />
@@ -305,11 +308,11 @@ export function Header({
             <button
               type="button"
               onClick={loginWithGoogle}
-              className="flex items-center gap-1.5 rounded-sm border border-primary/50 bg-primary/10 hover:bg-primary/20 text-primary px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition glow-green"
+              className="flex items-center gap-1 rounded-sm border border-primary/50 bg-primary/10 hover:bg-primary/20 text-primary px-2.5 py-1 text-xs font-semibold uppercase tracking-wider transition glow-green shrink-0"
               title="Iniciar sesión con Google"
             >
-              <UserIcon className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Iniciar sesión</span>
+              <UserIcon className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden md:inline">Iniciar sesión</span>
             </button>
           ) : null}
 
@@ -318,18 +321,23 @@ export function Header({
             <button
               type="button"
               onClick={() => setIsWhitelistOpen(true)}
-              className="flex items-center gap-1.5 rounded-sm border border-gold/50 bg-gold/10 hover:bg-gold/25 text-gold px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wider transition"
-              title="Panel de Administración: Whitelist y Migración de Datos Locales"
+              className="flex items-center gap-1 rounded-sm border border-gold/50 bg-gold/10 hover:bg-gold/25 text-gold px-2 py-1 text-xs font-semibold uppercase tracking-wider transition shrink-0"
+              title="Panel de Administración: Whitelist, Migración y Temáticas"
             >
-              <ShieldCheck className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Admin</span>
+              <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden md:inline">Admin</span>
             </button>
           )}
 
+          {/* Abandon / Reiniciar Button */}
           {isAdmin && (cloudTournament || activeTournament) && (
-            <DangerButton onClick={handleAbandon} title="Abandonar o reiniciar torneo activo en cualquier fase">
-              <LogOut className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Abandonar / Reiniciar Torneo</span>
+            <DangerButton
+              onClick={handleAbandon}
+              className="px-2 py-1 text-xs shrink-0 flex items-center gap-1"
+              title="Abandonar o reiniciar torneo activo en cualquier fase"
+            >
+              <LogOut className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden md:inline">Abandonar</span>
             </DangerButton>
           )}
         </div>

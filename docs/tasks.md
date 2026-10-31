@@ -333,6 +333,20 @@
   - Cubre: RF-34, RF-76, RF-77, RF-78, RF-79, RF-88, RF-110, RF-118, RF-Sanciones.  
   - Hecho cuando: `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites de tests de frontend (391 tests) y backend (153 tests) pasan 100% en verde.
 
+- [x] **T44.3 · Hotfix Estructural: AdminView a Pantalla Completa y Header Anti-Desborde**  
+  1. **Eliminación del Modal Atrapado en el Header y Creación de `AdminView` (`AdminView.tsx`):**  
+     - Debido a que `<header>` emplea `backdrop-blur-sm`, el modal flotante (`position: fixed`) quedaba atrapado dentro del contexto de apilamiento y altura del header. Se reemplazó el modal por una vista de página completa (`AdminView.tsx`, `view === 'admin'`), renderizada dentro de `<main>` en `App.tsx` en un contenedor ordenado `mx-auto max-w-5xl space-y-6`.  
+     - Incorporación de 3 pestañas principales: `Whitelist de Usuarios`, `Temáticas y Equipos` (gestión y consulta de plantillas) y `Migración a PostgreSQL`, además de un banner superior con botón de emergencia *"Abandonar / Reiniciar Torneo Activo"*.  
+  2. **Navegación y Blindaje de Socket en `App.tsx`:**  
+     - Incorporación de `'admin'` a `ViewType`.  
+     - Blindaje de `curr === 'admin'` en la rehidratación inicial y en todos los listeners de WebSocket (`handleTournamentStatus`, `handleTournamentAbandoned`, `handleVoteStarted`, `handleVoteEnded`, `handleDraftTurnUpdated`, `handleBracketSlotSessionStarted`, `handleFixtureReady`), garantizando que ninguna transición de fase ni abandono expulse involuntariamente al administrador de su panel de control.  
+  3. **Header Ultra-Limpio y Anti-Desborde (`Header.tsx`):**  
+     - Integración de `Admin` como la 4ta pestaña de navegación dentro de `<nav>` visible solo para `isAdmin`.  
+     - Eliminación del botón redundante de Admin y de la instancia de `WhitelistModal` del header.  
+     - Contenedor flexible `flex w-full flex-wrap items-center justify-between gap-2.5` que garantiza que todos los controles de la derecha (Dev Login, perfil, botón de abandonar) y la navegación queden 100% contenidos dentro de los límites del header sin desbordar ni cortarse a la derecha.  
+  - Cubre: RF-44, RF-57, RF-58, RF-59, RF-60, RF-90, RF-91, RF-118, RF-119, RNF-3.  
+  - Hecho cuando: `npx tsc --noEmit` y `npx tsc -p server/tsconfig.json` compilan con 0 errores, y suites de tests de frontend (391 tests) y backend (153 tests) pasan 100% en verde.
+
 
 
 

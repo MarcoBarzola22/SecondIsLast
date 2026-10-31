@@ -15,7 +15,6 @@ import { useAuth } from '../../context/AuthContext';
 import { useNetworkStatus } from '../../hooks/useNetworkStatus';
 import { saveOfflineTournament } from '../../cache/offlineStore';
 import { DangerButton } from '../ui/Buttons';
-import { WhitelistModal } from '../views/WhitelistModal';
 
 export type ViewType =
   | 'lobby'
@@ -30,7 +29,8 @@ export type ViewType =
   | 'group_stage'
   | 'double_elimination'
   | 'tabla'
-  | 'reglamento';
+  | 'reglamento'
+  | 'admin';
 
 interface HeaderProps {
   currentView: ViewType;
@@ -49,13 +49,12 @@ export function Header({
   const dispatch = useAppDispatch();
   const { user, displayName, isAdmin, isLoading, loginWithGoogle, devLogin, logout } = useAuth();
   const { isOffline, offlineReason } = useNetworkStatus();
-  const [isWhitelistOpen, setIsWhitelistOpen] = useState(false);
   const [isDevMenuOpen, setIsDevMenuOpen] = useState(false);
   const [customDevEmail, setCustomDevEmail] = useState('');
 
-  const isTournamentView = !['tabla', 'reglamento'].includes(currentView);
+  const isTournamentView = !['tabla', 'reglamento', 'admin'].includes(currentView);
   const hasAlert =
-    (currentView === 'tabla' || currentView === 'reglamento') &&
+    (currentView === 'tabla' || currentView === 'reglamento' || currentView === 'admin') &&
     Boolean(hasActiveTournamentAlert ?? (cloudTournament || activeTournament));
   const alertBadge = cloudTournament?.status === 'LOBBY' ? '🔴 Lobby' : '🔴 Activo';
 
@@ -141,12 +140,7 @@ export function Header({
             title="Flujo activo del torneo (Lobby, Votaciones, Equipos, Draft y Fixture)"
           >
             <Trophy className="h-3.5 w-3.5 shrink-0" />
-            <span>Torneo</span>
-            {hasAlert && (
-              <span className="ml-1 rounded-full bg-primary/30 border border-primary/50 px-1.5 py-0.2 text-[9px] font-bold text-primary animate-pulse whitespace-nowrap">
-                {alertBadge}
-              </span>
-            )}
+            <span>{hasAlert ? alertBadge : 'Torneo'}</span>
           </button>
 
           {/* Tab 2: Tabla y Perfiles */}
@@ -178,10 +172,27 @@ export function Header({
             <BookOpen className="h-3.5 w-3.5 text-accent shrink-0" />
             <span>Reglamento</span>
           </button>
+
+          {/* Tab 4: Admin (exclusivo para isAdmin) */}
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => onNavigate('admin')}
+              className={`flex items-center gap-1 sm:gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-semibold uppercase tracking-wider transition shrink-0 ${
+                currentView === 'admin'
+                  ? 'border-gold bg-gold/25 text-gold shadow-[0_0_12px_rgba(234,179,8,0.4)] font-bold'
+                  : 'border-border bg-secondary text-gold/80 hover:border-gold hover:text-gold hover:bg-gold/10'
+              }`}
+              title="Panel de Administración (Whitelist, Temáticas y Migración)"
+            >
+              <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-gold" />
+              <span>Admin</span>
+            </button>
+          )}
         </nav>
 
         {/* 3. Derecha: Controles de usuario */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Dev-Login Quick Switcher (DEV Only DX) */}
           {import.meta.env.DEV && (
             <div className="relative shrink-0">
@@ -316,19 +327,6 @@ export function Header({
             </button>
           ) : null}
 
-          {/* Admin Management Button (RF-91, Plan §6) */}
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={() => setIsWhitelistOpen(true)}
-              className="flex items-center gap-1 rounded-sm border border-gold/50 bg-gold/10 hover:bg-gold/25 text-gold px-2 py-1 text-xs font-semibold uppercase tracking-wider transition shrink-0"
-              title="Panel de Administración: Whitelist, Migración y Temáticas"
-            >
-              <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
-              <span className="hidden md:inline">Admin</span>
-            </button>
-          )}
-
           {/* Abandon / Reiniciar Button */}
           {isAdmin && (cloudTournament || activeTournament) && (
             <DangerButton
@@ -402,9 +400,6 @@ export function Header({
           </div>
         </div>
       )}
-
-      {/* Admin Whitelist Modal (RF-91, RF-119) */}
-      <WhitelistModal isOpen={isWhitelistOpen} onClose={() => setIsWhitelistOpen(false)} />
     </header>
   );
 }

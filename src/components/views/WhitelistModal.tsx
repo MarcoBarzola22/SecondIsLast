@@ -530,9 +530,9 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 min-h-0 space-y-5">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 min-h-0">
           {activeTab === 'whitelist' && (
-            <>
+            <div className="space-y-5">
               {error && (
                 <div className="flex items-center gap-2 p-3 bg-destructive/15 border border-destructive/40 text-destructive text-xs rounded-sm">
                   <AlertCircle className="h-4 w-4 shrink-0" />
@@ -707,7 +707,7 @@ export function WhitelistModal({ isOpen, onClose }: WhitelistModalProps) {
               </div>
             )}
           </div>
-            </>
+            </div>
           )}
 
           {activeTab === 'migration' && (

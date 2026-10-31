@@ -14,6 +14,7 @@ import { VotingView } from './components/views/VotingView';
 import { TeamsPreviewView } from './components/views/TeamsPreviewView';
 import { RulesView } from './components/views/RulesView';
 import { BracketSlotPickerView } from './components/views/BracketSlotPickerView';
+import { AdminView } from './components/views/AdminView';
 import { HandshakeModal, type HandshakeMatchData } from './components/views/HandshakeModal';
 import { PrimaryButton, SecondaryButton } from './components/ui/Buttons';
 import { Trophy } from 'lucide-react';
@@ -136,9 +137,9 @@ export default function App() {
           // Auto-synchronize view according to tournament.status across all clients (T28)
           const status = data.tournament.status;
           if (status === 'LOBBY') {
-            setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'lobby'));
+            setView((curr) => (curr === 'tabla' || curr === 'reglamento' || curr === 'admin' ? curr : 'lobby'));
           } else if (status === 'VOTING_FORMAT') {
-            setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'votacion'));
+            setView((curr) => (curr === 'tabla' || curr === 'reglamento' || curr === 'admin' ? curr : 'votacion'));
             const vs = data.tournament.votingSession || data.votingSession;
             if (vs) {
               setVotingSessionData({
@@ -168,7 +169,7 @@ export default function App() {
               Boolean(data.tournament.drawSession);
 
             setView((curr) => {
-              if (curr === 'tabla' || curr === 'reglamento') return curr;
+              if (curr === 'tabla' || curr === 'reglamento' || curr === 'admin') return curr;
               if (curr === 'draft') return 'draft';
               if (isAssignmentPhase) {
                 return 'equipos';
@@ -178,7 +179,7 @@ export default function App() {
           } else if (status === 'IN_PROGRESS') {
             const format = (data.tournament.format || '').toLowerCase();
             setView((curr) => {
-              if (curr === 'tabla' || curr === 'reglamento') return curr;
+              if (curr === 'tabla' || curr === 'reglamento' || curr === 'admin') return curr;
               if (format === 'bracket') return 'bracket';
               if (format === 'league' || format === 'league_playoffs') return 'league';
               if (format === 'group_stage') return 'group_stage';
@@ -212,7 +213,7 @@ export default function App() {
       setVotingSessionData(null);
       setLiveHandshakeMatch(null);
       setFinishedTournamentModal(null);
-      setView('lobby');
+      setView((curr) => (curr === 'tabla' || curr === 'reglamento' || curr === 'admin' ? curr : 'lobby'));
 
       // Immediate clean sync upon abandon across all clients
       if (isOnline) {
@@ -226,15 +227,15 @@ export default function App() {
         return;
       }
       if (payload?.status === 'VOTING_FORMAT') {
-        setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'votacion'));
+        setView((curr) => (curr === 'tabla' || curr === 'reglamento' || curr === 'admin' ? curr : 'votacion'));
       } else if (payload?.status === 'VOTING_THEME') {
         setView((curr) => {
-          if (curr === 'tabla' || curr === 'reglamento') return curr;
+          if (curr === 'tabla' || curr === 'reglamento' || curr === 'admin') return curr;
           if (curr === 'draft') return 'draft';
           return 'votacion';
         });
       } else if (payload?.status === 'DRAFT') {
-        setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'draft'));
+        setView((curr) => (curr === 'tabla' || curr === 'reglamento' || curr === 'admin' ? curr : 'draft'));
       }
       if (isOnline) {
         await rehydrateActiveTournament();
@@ -253,12 +254,12 @@ export default function App() {
           phase: payload.phase,
           totalVoters: payload.totalVoters,
         });
-        setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'votacion'));
+        setView((curr) => (curr === 'tabla' || curr === 'reglamento' || curr === 'admin' ? curr : 'votacion'));
       } else if (
         payload?.phase === 'ASSIGNMENT_METHOD' ||
         payload?.phase === 'BRACKET_METHOD'
       ) {
-        setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'equipos'));
+        setView((curr) => (curr === 'tabla' || curr === 'reglamento' || curr === 'admin' ? curr : 'equipos'));
         if (isOnline) {
           rehydrateActiveTournament();
         }
@@ -271,7 +272,7 @@ export default function App() {
         payload?.phase === 'PLAYOFF_SPOTS' ||
         payload?.phase === 'THEME'
       ) {
-        setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'votacion'));
+        setView((curr) => (curr === 'tabla' || curr === 'reglamento' || curr === 'admin' ? curr : 'votacion'));
         // Do NOT rehydrate immediately during FORMAT, PLAYOFF_SPOTS or THEME result display!
         return;
       }
@@ -282,7 +283,7 @@ export default function App() {
 
     const handleDraftTurnUpdated = async () => {
       setView((curr) => {
-        if (curr === 'tabla' || curr === 'reglamento') return curr;
+        if (curr === 'tabla' || curr === 'reglamento' || curr === 'admin') return curr;
         if (curr === 'equipos') return 'equipos';
         return 'draft';
       });
@@ -292,7 +293,7 @@ export default function App() {
     };
 
     const handleBracketSlotSessionStarted = () => {
-      setView((curr) => (curr === 'tabla' || curr === 'reglamento' ? curr : 'bracket_slots'));
+      setView((curr) => (curr === 'tabla' || curr === 'reglamento' || curr === 'admin' ? curr : 'bracket_slots'));
     };
 
     const handleFixtureReady = async (payload: any) => {
@@ -319,7 +320,7 @@ export default function App() {
       ).toLowerCase();
 
       setView((curr) => {
-        if (curr === 'tabla' || curr === 'reglamento') return curr;
+        if (curr === 'tabla' || curr === 'reglamento' || curr === 'admin') return curr;
         if (format === 'league' || format === 'league_playoffs') return 'league';
         if (format === 'group_stage') return 'group_stage';
         if (format === 'double_elimination') return 'double_elimination';
@@ -620,6 +621,8 @@ export default function App() {
         {view === 'tabla' && <StandingsView onGoToLobby={() => setView('lobby')} />}
 
         {view === 'reglamento' && <RulesView />}
+
+        {view === 'admin' && <AdminView />}
       </main>
 
       {liveHandshakeMatch && (
